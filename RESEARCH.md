@@ -198,10 +198,12 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 | Cas | Gas avec hook | Gas sans hook | Overhead hook |
 |---|---|---|---|
 | Achat exactIn 1 ETH | 155 059 | 109 506 | **45 553** |
+| Achat exactOut 1 TOKEN | 161 779 | 113 113 | **48 666** |
 | Vente exactIn 1 TOKEN | 148 008 | 117 359 | **30 649** |
+| Vente exactOut 0,5 ETH | 155 540 | 129 954 | **25 586** |
 | `flush()` (burn des claims + `take` ETH vers le vault, amorti sur N swaps) | 78 351 | — | — |
 
-→ L'overhead par swap est au plus équivalent au spike (achat) et inférieur de ~14k (vente), sans exposer le marché à un vault qui revert. Les cas exactOut seront mesurés en S1.3.
+→ L'overhead par swap est équivalent au spike à l'achat et inférieur de 14–20k à la vente, sans exposer le marché à un vault qui revert. Via l'**UniversalRouter officiel** `0x8876…0904` (+ Permit2 pour l'entrée en token), un swap avec le hook coûte 150 634 (vente exactIn) à 152 933 (achat exactIn) gas, mesurés dans `test/fork/WarchestHookRouterFork.t.sol`.
 
 ### 4.2 Gouvernance : merkle root (D2) vs écriture par wallet
 | Opération | Gas | Coût actuel | Coût au pic |

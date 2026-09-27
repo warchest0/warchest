@@ -316,6 +316,7 @@ export class Keeper {
         say(`protect ${plan.coin}: size ${plan.size} entry ${plan.entryPx} stop ${plan.stopLossPx}${plan.takeProfitPx ? ` tp ${plan.takeProfitPx}` : ""}`);
         const r = await exec.protect(plan, run);
         if (!r.done) return run;
+        if (r.attempts !== undefined) run = store.patch(id, { protectAttempts: r.attempts });
         if (!r.verified) {
           await this.d.alerts.critical("stop-loss could not be verified, flattening", { decisionId: id });
           await this.flatten(run, perp, hlPos, "stop-loss not verified");

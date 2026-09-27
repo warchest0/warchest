@@ -23,6 +23,7 @@ export interface ProtectResult extends ExecResult {
   takeProfitOid?: number;
   /** True when the stop was read back from `frontendOpenOrders` (fail-closed otherwise). */
   verified?: boolean;
+  attempts?: number;
 }
 
 export interface CloseResult extends ExecResult {

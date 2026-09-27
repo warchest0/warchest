@@ -1,5 +1,7 @@
 # WARCHEST — État d'avancement (2026-09-27)
 
+Repo : **github.com/warchest0/warchest**. L'historique a été migré depuis aliby00/Warchest le 2026-09-27, et tous les commits sont réécrits au nom de warchest0. Les numéros de PR #1 à #28 cités ci-dessous renvoient à l'ancien repo.
+
 Tout le code est sur **`staging`**. Rien n'a été poussé sur `main` (production).
 
 Flux : `feat/*` → PR → `staging` → (plus tard) `main`. Chaque PR n'a été mergée qu'avec une CI verte, à une exception près : la #9, corrigée par la #10.

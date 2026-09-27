@@ -1,13 +1,13 @@
-# Spike S0.1 — mesure de gas réelle (code jetable)
+# Spike S0.1 — real gas measurement (throwaway code)
 
-Fork du **mainnet Robinhood Chain (4663)** avec le **vrai PoolManager v4** `0x8366…0951`.
-Rien ici n'est du code de production.
+Fork of **Robinhood Chain mainnet (4663)** with the **real v4 PoolManager** `0x8366…0951`.
+Nothing here is production code.
 
 ```bash
 ./setup.sh
 forge test -vv
 ```
 
-- `src/SpikeFeeHook.sol` : hook minimal, 10 % en ETH, pour mesurer l'overhead.
-- `src/SpikeBench.sol` : vote merkle (D2), et les alternatives rejetées (levels par wallet, lots on-chain LIFO/FIFO).
-- `test/Gas.t.sol` : les mesures. Les résultats sont reportés dans `RESEARCH.md` §4.
+- `src/SpikeFeeHook.sol`: minimal hook, 10% in ETH, to measure the overhead.
+- `src/SpikeBench.sol`: merkle vote (D2), and the rejected alternatives (per-wallet levels, on-chain LIFO/FIFO lots).
+- `test/Gas.t.sol`: the measurements. Results are reported in `RESEARCH.md` §4.

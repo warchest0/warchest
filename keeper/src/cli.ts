@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { HttpAcrossApi } from "./across/api.js";
 import { RpcChainReader } from "./chain/reader.js";
+import { RpcChainWriter } from "./chain/writer.js";
 import { loadConfig, type Config } from "./config.js";
 import { DryRunExecutor, type Executor } from "./executor.js";
 import { TradingEngine } from "./hyperliquid/engine.js";
@@ -10,6 +11,7 @@ import { HttpHyperliquidExchange } from "./hyperliquid/exchange.js";
 import { HttpHyperliquidInfo } from "./hyperliquid/info.js";
 import { AgentSigner } from "./hyperliquid/signer.js";
 import { Keeper } from "./keeper.js";
+import { LiveExecutor } from "./live.js";
 import { defaultAlerts, Logger, type Alerts } from "./log.js";
 import { Monitor } from "./monitor.js";
 import { Store } from "./store.js";
@@ -51,7 +53,7 @@ export function buildMonitor(cfg: Config): Monitor {
   return new Monitor({ chain, hl, alerts, tradingAccount: cfg.hlTradingAccount, hlAccount: cfg.hlAccount, allowedAssets: cfg.allowedAssets, agentAddress, agentExpiryWarnMs: cfg.agentExpiryWarnMs, kill });
 }
 
-/** Builds the keeper from the environment. Live executors are wired by later slices; dry-run is always available. */
+/** Builds the keeper from the environment: dry-run logs only; live signs with the two bounded keys. */
 export function wire(cfg: Config = loadConfig()): Wiring {
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store = new Store(cfg.dbPath);
@@ -59,8 +61,14 @@ export function wire(cfg: Config = loadConfig()): Wiring {
   const hl = new HttpHyperliquidInfo(cfg.hlInfoUrl);
   const across = new HttpAcrossApi(cfg.acrossApiUrl);
   const alerts = defaultAlerts(cfg.alertWebhookUrl);
-  if (cfg.mode === "live") throw new Error("live mode is not wired yet (S5.2–S5.4)");
-  const exec = new DryRunExecutor();
+  let exec: Executor;
+  if (cfg.mode === "live") {
+    if (!cfg.keeperKey) throw new Error("KEEPER_PRIVATE_KEY required");
+    const writer = new RpcChainWriter(cfg.rpcUrl, cfg.chainId, cfg.vault, cfg.keeperKey);
+    exec = new LiveExecutor({ writer, reader: chain, engine: buildEngine(cfg, hl, alerts), across, alerts, vault: cfg.vault, chainId: cfg.chainId, tradingAccount: cfg.hlTradingAccount });
+  } else {
+    exec = new DryRunExecutor();
+  }
   const keeper = new Keeper({
     cfg,
     chain,

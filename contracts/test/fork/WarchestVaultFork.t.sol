@@ -47,10 +47,10 @@ contract ForkSwapper is IUniswapV3SwapCallback {
     }
 }
 
-/// @notice S3.1–S3.2 against the REAL Uniswap v3 0.01% WETH/USDG pool, WETH, USDG and Across SpokePool on a
+/// @notice Vault deployed on the REAL Uniswap v3 0.01% WETH/USDG pool, WETH, USDG and Across SpokePool of a
 ///         Robinhood Chain mainnet fork. Governance is mocked (its own suites cover it).
-/// @dev Requires `ROBINHOOD_RPC_URL`; the whole suite is skipped when it is unset.
-contract WarchestVaultForkTest is Test {
+/// @dev Requires `ROBINHOOD_RPC_URL`; the suites built on it are skipped when it is unset.
+abstract contract WarchestVaultForkFixture is Test {
     IUniswapV3PoolMinimal constant POOL = IUniswapV3PoolMinimal(0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca);
     IWETH9 constant WETH = IWETH9(0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73);
     IERC20 constant USDG = IERC20(0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168);
@@ -72,6 +72,8 @@ contract WarchestVaultForkTest is Test {
     bool forked;
     MockDecisionSource gov;
     WarchestVault vault;
+    /// |30 min TWAP − 6 h TWAP| at the fork block, before any settling (see {_settleOracle}).
+    uint256 rawDeviationAtFork;
 
     modifier onlyFork() {
         if (!forked) vm.skip(true);
@@ -112,6 +114,21 @@ contract WarchestVaultForkTest is Test {
                 reportChallengeWindow: 6 hours
             })
         );
+        _settleOracle();
+    }
+
+    /// The fork is the live market: if ETH moved more than the breaker's tolerance between the 30 min and the 6 h
+    /// TWAP at the fork block, the breaker is (correctly) tripped and every conversion would wait. Let the oracle
+    /// settle on the current price so the conversion tests run in normal conditions; the raw state is logged.
+    function _settleOracle() internal {
+        int24 short_ = vault.twapTick();
+        int24 long_ = vault.longTwapTick();
+        rawDeviationAtFork = uint256(uint24(short_ > long_ ? short_ - long_ : long_ - short_));
+        if (!vault.oracleStable()) {
+            console2.log("oracle breaker tripped at the fork block, deviation (ticks)", rawDeviationAtFork);
+            vm.warp(vm.getBlockTimestamp() + vault.LONG_TWAP_WINDOW());
+            assertTrue(vault.oracleStable(), "TWAPs must agree once the price has been constant for 6 h");
+        }
     }
 
     function _fund(uint256 amount) internal {
@@ -133,6 +150,11 @@ contract WarchestVaultForkTest is Test {
         return bytes32(uint256(uint160(a)));
     }
 
+    receive() external payable {}
+}
+
+/// @notice S3.1–S3.2 on the real venue and bridge.
+contract WarchestVaultForkTest is WarchestVaultForkFixture {
     // ---------------------------------------------------------------------------------------------------------------
     // S3.1 — venue & conversion
     // ---------------------------------------------------------------------------------------------------------------
@@ -342,6 +364,4 @@ contract WarchestVaultForkTest is Test {
         assertEq(vault.position().decisionId, 0);
         assertEq(vault.lastExecutedDecisionId(), 0);
     }
-
-    receive() external payable {}
 }

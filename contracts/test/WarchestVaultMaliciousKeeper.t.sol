@@ -128,25 +128,37 @@ contract WarchestVaultMaliciousKeeperTest is VaultFixture {
         assertEq(vault.distributable(), 0);
     }
 
-    /// An early close report lets the keeper re-execute after the window, but each execution is still ≤ cap of the
-    /// liquid NAV and needs a NEW governance decision, so the exposure per decision is unchanged.
+    /// An early close report lets the keeper re-execute after the window, but the position must first be
+    /// `reportChallengeWindow` old, a close that brought nothing back delays the next order by another window, and
+    /// each execution is still ≤ cap of the liquid NAV and needs a NEW governance decision.
     function test_earlyCloseCannotBypassCapOrDecisionRule() public {
         _convert(MAX_CONVERT, vault.twapFloor(MAX_CONVERT));
         uint256 id = gov.nextDecision(BTC, IWarchestDecisionSource.Side.Long);
         uint256 cap1 = vault.maxOrderAmount();
         _execute(cap1);
+        uint256 closableAt = vm.getBlockTimestamp() + REPORT_WINDOW;
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(WarchestVault.PositionTooYoung.selector, id, closableAt));
+        vault.reportClosed(id);
+        vm.warp(closableAt);
         vm.prank(keeper);
         vault.reportClosed(id);
         vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW);
         vault.finalizeClose(id);
+        uint256 nextExecuteAt = vm.getBlockTimestamp() + REPORT_WINDOW;
+        assertEq(vault.nextExecuteAt(), nextExecuteAt, "nothing came back: cooldown before the next order");
 
         // same decision: blocked
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(WarchestVault.DecisionAlreadyExecuted.selector, id, id));
         vault.executeDecision(1, 1, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + 1 hours);
 
-        // new decision: cap is 20% of what is LEFT, deployed capital never counts
+        // new decision: cooldown first, then cap is 20% of what is LEFT, deployed capital never counts
         gov.nextDecision(BTC, IWarchestDecisionSource.Side.Long);
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(WarchestVault.ExecuteCooldown.selector, nextExecuteAt));
+        vault.executeDecision(1, 1, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + 1 hours);
+        vm.warp(nextExecuteAt);
         uint256 cap2 = vault.maxOrderAmount();
         assertLt(cap2, cap1);
         assertEq(cap2, vault.nav() * 2_000 / 10_000);
@@ -210,6 +222,7 @@ contract WarchestVaultMaliciousKeeperTest is VaultFixture {
         vault.transferGuardian(makeAddr("g2"));
         vault.transferGuardian(guardian);
         vm.stopPrank();
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW); // minimum position age
         vm.prank(keeper);
         vault.reportClosed(id);
         vm.prank(guardian);

@@ -37,6 +37,7 @@ contract VaultHandler is Test {
     uint256 public bridged;
     uint256 public openCapital;
     uint256 public returnedMinted;
+    uint256 public principalDeposited;
     uint256 public executions;
     uint256 public closes;
     int256 public pnlGhost;
@@ -103,8 +104,26 @@ contract VaultHandler is Test {
         pool.setExecTick(baseTick + int24(bound(offset, -3_000, 3_000)));
     }
 
+    /// The market moves: short and long TWAP agree.
     function moveTwap(int24 offset) external {
         pool.setTwapTick(baseTick + int24(bound(offset, -500, 500)));
+    }
+
+    /// The short TWAP is being held away from the long one (manipulation or fast market): the breaker may trip.
+    function moveShortTwap(int24 offset) external {
+        pool.setShortTwapTick(pool.longTwapTick() + int24(bound(offset, -500, 500)));
+    }
+
+    /// Anyone tops up the treasury in USDG: principal, never PnL.
+    function depositPrincipal(uint256 seed, uint96 amount) external hwmMonotonic {
+        amount = uint96(bound(amount, 1, 1_000_000e6));
+        address from = address(uint160(uint256(keccak256(abi.encode("usdgFunder", seed % 3)))));
+        usdg.mint(from, amount);
+        vm.startPrank(from);
+        usdg.approve(address(vault), amount);
+        vault.depositPrincipal(amount);
+        vm.stopPrank();
+        principalDeposited += amount;
     }
 
     function warp(uint32 by) external {
@@ -224,12 +243,15 @@ contract VaultHandler is Test {
         } catch {}
     }
 
+    /// Mirrors the vault's rule: a stray is PnL only up to the last close's shortfall and inside its window.
     function reconcile() external hwmMonotonic {
         uint256 stray = usdg.balanceOf(address(vault)) - vault.usdgLedger();
-        bool countsAsPnl = vault.lastClosedDecisionId() != 0;
+        uint256 allowance = vault.lateReturnAllowance();
+        bool inWindow = vm.getBlockTimestamp() <= uint256(vault.lastClosedAt()) + vault.lateReturnWindow();
+        uint256 asPnl = (allowance != 0 && inWindow) ? (stray < allowance ? stray : allowance) : 0;
         vm.prank(keeper);
         try vault.reconcile() {
-            if (countsAsPnl) pnlGhost += int256(stray);
+            pnlGhost += int256(asPnl);
         } catch {}
     }
 
@@ -266,6 +288,8 @@ contract VaultHandler is Test {
         vault.setPaused(true);
         vm.expectRevert(WarchestVault.NotGuardian.selector);
         vault.setKeeper(attacker);
+        vm.expectRevert(WarchestVault.ZeroAmount.selector);
+        vault.depositPrincipal(0);
         vm.stopPrank();
     }
 
@@ -306,7 +330,7 @@ contract VaultInvariantTest is VaultFixture {
     function invariant_usdgConservation() public view {
         assertEq(
             usdg.balanceOf(address(vault)) + usdg.balanceOf(address(spoke)) + usdg.balanceOf(distributor),
-            handler.usdgOut() + handler.returnedMinted()
+            handler.usdgOut() + handler.returnedMinted() + handler.principalDeposited()
         );
         assertEq(usdg.balanceOf(address(spoke)), handler.bridged());
         assertEq(usdg.balanceOf(distributor), handler.distributed());
@@ -340,8 +364,9 @@ contract VaultInvariantTest is VaultFixture {
         }
     }
 
-    /// Realized PnL is exactly Σ (measured returns − capital) + late returns; the high-water mark equals what was
-    /// distributed and never decreases; distributable never exceeds the accounted USDG nor PnL above the mark.
+    /// Realized PnL is exactly Σ (measured returns − capital) + bounded late returns (principal deposits and
+    /// donations never count); the high-water mark equals what was distributed and never decreases; distributable
+    /// never exceeds the accounted USDG nor PnL above the mark.
     function invariant_pnlAndHighWaterMark() public view {
         assertEq(vault.cumulativePnl(), handler.pnlGhost());
         assertEq(vault.highWaterMark(), handler.distributed());

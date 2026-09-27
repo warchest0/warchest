@@ -1,62 +1,62 @@
-# WARCHEST — Décisions d'architecture
+# WARCHEST — Architecture decisions
 
-> Tranchées le 2026-09-27 à partir de `RESEARCH.md`, par délégation du porteur de projet (recommandations de `PLAN.md`).
-> Statut : **ACTÉ** = on build dessus · **PROVISOIRE** = on build dessus, à confirmer par une mesure · **OUVERT** = bloqué par un tiers (juridique, argent réel).
+> Settled on 2026-09-27 based on `RESEARCH.md`, by delegation from the project owner (recommendations from `PLAN.md`).
+> Status: **ADOPTED** = we build on it · **PROVISIONAL** = we build on it, to be confirmed by a measurement · **OPEN** = blocked by a third party (legal, real money).
 
-## D1 — Lots : LIFO — ACTÉ
-Une vente consomme d'abord les tokens acquis le plus récemment, conformément au whitepaper §2.2. Le plan technique disait « FIFO » : c'est une coquille.
-Un transfert wallet → wallet compte comme une vente LIFO côté émetteur et crée un nouveau lot de level 0 côté receveur.
+## D1 — Lots: LIFO — ADOPTED
+A sale consumes the most recently acquired tokens first, in line with whitepaper §2.2. The technical plan said "FIFO": that is a typo.
+A wallet → wallet transfer counts as a LIFO sale on the sender side and creates a new level-0 lot on the receiver side.
 
-## D2 — Poids de vote : merkle root par epoch — ACTÉ
-- L'indexer calcule `weight(wallet) = Σ lot.amount × level(lot)`, avec un level de 0 à 10.
-- Il construit un arbre merkle `(epoch, wallet, weight)`, publie l'arbre et le script, puis pousse **uniquement le root** via `submitWeightRoot`.
-- Le root devient votable après une **fenêtre de challenge** pendant laquelle le guardian peut le révoquer.
-- Chaque votant fournit sa preuve. Cela élimine le double vote par transfert, puisque le poids est figé au snapshot.
-- On ne stocke aucun level par wallet on-chain.
+## D2 — Voting weight: merkle root per epoch — ADOPTED
+- The indexer computes `weight(wallet) = Σ lot.amount × level(lot)`, with a level from 0 to 10.
+- It builds a merkle tree `(epoch, wallet, weight)`, publishes the tree and the script, then pushes **only the root** via `submitWeightRoot`.
+- The root becomes votable after a **challenge window** during which the guardian can revoke it.
+- Each voter provides their proof. This eliminates double voting via transfer, since the weight is frozen at the snapshot.
+- No per-wallet level is stored on-chain.
 
-## D3 — Fee toujours prélevée en ETH — ACTÉ
-- ETH natif = `currency0`, donc `zeroForOne` = achat.
-- Si l'ETH est la devise spécifiée, le prélèvement se fait en `beforeSwap` ; si elle est non spécifiée, en `afterSwap`.
-- La fee est de 10 %, envoyée à un vault immuable.
-- Pas de fee sur l'ajout ou le retrait de liquidité, ni sur `transfer`.
+## D3 — Fee always taken in ETH — ADOPTED
+- Native ETH = `currency0`, so `zeroForOne` = buy.
+- If ETH is the specified currency, the fee is taken in `beforeSwap`; if it is unspecified, in `afterSwap`.
+- The fee is 10%, sent to an immutable vault.
+- No fee on adding or removing liquidity, nor on `transfer`.
 
-## D4 — Garde des fonds Hyperliquid : multisig natif HL + sub-account + agent — ACTÉ (phase 1)
-- Compte maître converti via `convertToMultiSigUser` (seuil ≥ 2/3).
-- Le trading se fait dans un sub-account, via un agent nommé avec expiration ≤ 30 jours et rotation.
-- **Aucun builder fee n'est approuvé.**
-- Le retour des fonds est signé par le multisig, jamais par le keeper.
-- L'option d'un compte détenu par un contrat HyperEVM via CoreWriter est reportée en phase 2.
+## D4 — Custody of Hyperliquid funds: native HL multisig + sub-account + agent — ADOPTED (phase 1)
+- Master account converted via `convertToMultiSigUser` (threshold ≥ 2/3).
+- Trading happens in a sub-account, via a named agent with expiry ≤ 30 days and rotation.
+- **No builder fee is approved.**
+- The return of funds is signed by the multisig, never by the keeper.
+- The option of an account held by an HyperEVM contract via CoreWriter is deferred to phase 2.
 
-## D5 — Route de bridge — PROVISOIRE
-Aller :
-1. Le vault swappe ETH → USDG sur Robinhood Chain.
-2. Across `4663 USDG → 999 USDC`, avec recipient = adresse du compte HL (immuable dans le vault).
-3. Transfert HyperEVM → HyperCore vers l'adresse système.
+## D5 — Bridge route — PROVISIONAL
+Outbound:
+1. The vault swaps ETH → USDG on Robinhood Chain.
+2. Across `4663 USDG → 999 USDC`, with recipient = HL account address (immutable in the vault).
+3. HyperEVM → HyperCore transfer to the system address.
 
-Retour : `withdraw3` ou Across `999 → 4663`, découpé selon `/limits`.
+Return: `withdraw3` or Across `999 → 4663`, split according to `/limits`.
 
-À confirmer par S0.3 (petit transfert réel sur mainnet, en attente de l'accord et des fonds du porteur).
+To be confirmed by S0.3 (small real transfer on mainnet, pending the owner's approval and funds).
 
-## D6 — E2E testnet avec bridge simulé — ACTÉ
-Across n'existe ni sur le testnet Robinhood ni sur le testnet Hyperliquid. Le plan d'E2E est donc :
-- Sur le testnet Robinhood : le v4 officiel (mêmes adresses que le mainnet) et un `MockAcrossSpokePool`.
-- Sur le testnet Hyperliquid : trading réel.
-- Puis sur mainnet : petits montants, puis montants de taille trésorerie, avant toute trésorerie réelle.
+## D6 — Testnet E2E with simulated bridge — ADOPTED
+Across exists on neither the Robinhood testnet nor the Hyperliquid testnet. The E2E plan is therefore:
+- On the Robinhood testnet: the official v4 (same addresses as mainnet) and a `MockAcrossSpokePool`.
+- On the Hyperliquid testnet: real trading.
+- Then on mainnet: small amounts, then treasury-sized amounts, before any real treasury.
 
-## D7 — Distribution des profits — OUVERT (juridique)
-- Le `WarchestDistributor` (merkle cumulatif, pattern Morpho URD) est construit comme un **module séparé désactivé par défaut**.
-- L'alternative buyback & burn reste possible sans toucher gouvernance ni vault.
-- La décision finale attend l'avis juridique.
+## D7 — Profit distribution — OPEN (legal)
+- The `WarchestDistributor` (cumulative merkle, Morpho URD pattern) is built as a **separate module disabled by default**.
+- The buyback & burn alternative remains possible without touching governance or the vault.
+- The final decision awaits legal advice.
 
-## D8 — Fallback de quorum — ACTÉ
-- Si le quorum n'est pas atteint, la **direction** et l'**actif** précédents restent la décision courante.
-- Une position fermée par stop-loss **n'est jamais rouverte automatiquement** : il faut une nouvelle décision ayant atteint le quorum.
-- S'il n'existe aucune décision précédente, on ne fait rien.
+## D8 — Quorum fallback — ADOPTED
+- If quorum is not reached, the previous **direction** and **asset** remain the current decision.
+- A position closed by stop-loss **is never reopened automatically**: a new decision that reached quorum is required.
+- If there is no previous decision, nothing is done.
 
-## D9 — Guardian multisig — ACTÉ
-Le guardian peut :
-- pauser le vault et le keeper ;
-- révoquer un root de poids pendant sa fenêtre de challenge ;
-- révoquer un rapport keeper pendant sa fenêtre.
+## D9 — Guardian multisig — ADOPTED
+The guardian can:
+- pause the vault and the keeper;
+- revoke a weight root during its challenge window;
+- revoke a keeper report during its window.
 
-Il **ne peut jamais** déplacer de fonds ni changer le recipient du bridge.
+It **can never** move funds or change the bridge recipient.

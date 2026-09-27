@@ -1,29 +1,29 @@
-# Demande d'audit — brouillon (S1.5)
+# Audit request — draft (S1.5)
 
-**Cible** : Uniswap Foundation Security Fund, qui peut subventionner l'audit de hooks v4. Voir https://www.uniswapfoundation.org/blog/proactive-security-for-uniswap-v4-builders
-**À envoyer par le porteur du projet.** Rien n'a été soumis automatiquement.
+**Target**: Uniswap Foundation Security Fund, which can subsidize v4 hook audits. See https://www.uniswapfoundation.org/blog/proactive-security-for-uniswap-v4-builders
+**To be sent by the project owner.** Nothing has been submitted automatically.
 
-## Périmètre phase 1
-| Fichier | Rôle |
+## Phase 1 scope
+| File | Role |
 |---|---|
-| `src/WarchestHook.sol` | Hook de fee 10 % en ETH (≈ 260 lignes) |
-| `src/WarchestToken.sol` | ERC20 pur (≈ 25 lignes) |
-| `script/DeployWarchest.s.sol`, `script/DeployWarchestHook.s.sol`, `script/utils/HookMiner.sol` | Lancement |
+| `src/WarchestHook.sol` | 10% ETH fee hook (≈ 260 lines) |
+| `src/WarchestToken.sol` | Plain ERC20 (≈ 25 lines) |
+| `script/DeployWarchest.s.sol`, `script/DeployWarchestHook.s.sol`, `script/utils/HookMiner.sol` | Launch |
 
-La gouvernance et le vault feront l'objet d'une seconde vague, après S2 et S3.
+Governance and the vault will be covered in a second wave, after S2 and S3.
 
-## Points à faire regarder en priorité
-1. Signes des `BeforeSwapDelta` et des retours `int128` dans les 4 cas achat/vente × exactIn/exactOut.
-2. Formule `feeOnNet = ceil(net/9)` et arrondis (borne prouvée par fuzz : 0 ≤ fee − 10 %·brut < 1 wei).
-3. Politique de revert sur `PartialFill`.
-4. `flush()` permissionless : réentrance depuis le vault, et 1 wei conservé volontairement.
-5. Restriction `beforeInitialize`.
+## Priority review points
+1. Signs of the `BeforeSwapDelta` and `int128` return values in the 4 buy/sell × exactIn/exactOut cases.
+2. `feeOnNet = ceil(net/9)` formula and rounding (bound proven by fuzzing: 0 ≤ fee − 10%·gross < 1 wei).
+3. Revert policy on `PartialFill`.
+4. Permissionless `flush()`: reentrancy from the vault, and 1 wei deliberately retained.
+5. `beforeInitialize` restriction.
 
 ## Tests
-72+ tests :
-- unitaires ;
-- fuzz sur les 4 cas ;
-- 7 invariants stateful ;
-- tests fork sur le vrai PoolManager et l'UniversalRouter du mainnet 4663.
+72+ tests:
+- unit;
+- fuzz over the 4 cases;
+- 7 stateful invariants;
+- fork tests against the real PoolManager and UniversalRouter on mainnet 4663.
 
-Mesures de gas dans `RESEARCH.md` §4.1.
+Gas measurements in `RESEARCH.md` §4.1.

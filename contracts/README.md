@@ -33,3 +33,6 @@ export POOL_MANAGER=0x8366a39CC670B4001A1121B8F6A443A643e40951 WARCHEST_TOKEN=..
 forge script script/DeployWarchestHook.s.sol --rpc-url robinhood_testnet --broadcast --verify
 ```
 Le script mine un salt (`script/utils/HookMiner.sol`) et déploie via le CREATE2 deployer `0x4e59b44847b379578588920cA78FbF26c0B4956C` pour que l'adresse encode les flags `beforeInitialize | beforeSwap | afterSwap | beforeSwapReturnDelta | afterSwapReturnDelta` (`0x20CC`). Testé sur fork mainnet (`test/fork/`).
+
+## Lancement complet (S1.4)
+`script/DeployWarchest.s.sol` : token, hook, initialisation du pool et liquidité full-range, en un seul script (testnet et mainnet). Runbook : `docs/DEPLOY.md`. Dossiers : `docs/HOOKLIST.md`, `docs/AUDIT-REQUEST.md`.

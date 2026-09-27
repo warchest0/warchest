@@ -38,7 +38,7 @@ contract DeployWarchestHook is Script {
     error UnexpectedAddress(address expected, address actual);
     error BadImmutables();
 
-    function run() external returns (WarchestHook hook) {
+    function run() external virtual returns (WarchestHook hook) {
         IPoolManager poolManager = IPoolManager(vm.envAddress("POOL_MANAGER"));
         address token = vm.envAddress("WARCHEST_TOKEN");
         address vault = vm.envAddress("WARCHEST_VAULT");

@@ -39,7 +39,7 @@ Retour : `withdraw3` ou Across `999 → 4663`, découpé selon `/limits`.
 
 ## D6 — E2E testnet avec bridge simulé — ACTÉ
 Across n'existe ni sur le testnet Robinhood ni sur le testnet Hyperliquid. Le plan d'E2E est donc :
-- Sur le testnet Robinhood : v4 déployé par nous et un `MockAcrossSpokePool`.
+- Sur le testnet Robinhood : le v4 officiel (mêmes adresses que le mainnet) et un `MockAcrossSpokePool`.
 - Sur le testnet Hyperliquid : trading réel.
 - Puis sur mainnet : petits montants, puis montants de taille trésorerie, avant toute trésorerie réelle.
 

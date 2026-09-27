@@ -149,7 +149,7 @@ contract WarchestVaultConversionTest is VaultFixture {
         assertEq(vault.usdgLedger(), out);
         assertEq(weth.balanceOf(address(vault)), 0, "no WETH left behind");
         assertEq(weth.balanceOf(address(pool)), 1 ether);
-        assertEq(vault.lastConvertAt(), block.timestamp);
+        assertEq(vault.lastConvertAt(), vm.getBlockTimestamp());
     }
 
     function test_convert_atMaxPerCall() public {
@@ -169,7 +169,7 @@ contract WarchestVaultConversionTest is VaultFixture {
     function test_convert_afterCooldown() public {
         _fund(attacker, 2 ether);
         _convert(1 ether, vault.twapFloor(1 ether));
-        vm.warp(block.timestamp + COOLDOWN);
+        vm.warp(vm.getBlockTimestamp() + COOLDOWN);
         _convert(1 ether, vault.twapFloor(1 ether));
         assertEq(address(vault).balance, 0);
         assertEq(vault.usdgLedger(), usdg.balanceOf(address(vault)));
@@ -230,7 +230,7 @@ contract WarchestVaultConversionTest is VaultFixture {
     function test_convert_revertsCooldown() public {
         _fund(attacker, 2 ether);
         _convert(1 ether, vault.twapFloor(1 ether));
-        uint256 nextAllowed = block.timestamp + COOLDOWN;
+        uint256 nextAllowed = vm.getBlockTimestamp() + COOLDOWN;
         vm.warp(nextAllowed - 1);
         uint256 floor = vault.twapFloor(1 ether);
         vm.prank(keeper);
@@ -432,7 +432,7 @@ contract WarchestVaultConversionTest is VaultFixture {
         pool.setExecTick(TICK - 100); // 1.0001^-100 ≈ −0.995%, just inside the band
         uint256 total;
         for (uint256 i; i < 10; ++i) {
-            vm.warp(block.timestamp + COOLDOWN);
+            vm.warp(vm.getBlockTimestamp() + COOLDOWN);
             total += _convert(MAX_CONVERT, vault.twapFloor(MAX_CONVERT));
         }
         assertEq(address(vault).balance, 0);
@@ -448,11 +448,13 @@ contract WarchestVaultConversionTest is VaultFixture {
         uint256 floor = vault.twapFloor(MAX_CONVERT);
         _convert(MAX_CONVERT, floor);
         vm.prank(keeper);
-        vm.expectRevert(abi.encodeWithSelector(WarchestVault.ConvertCooldown.selector, block.timestamp + COOLDOWN));
+        vm.expectRevert(
+            abi.encodeWithSelector(WarchestVault.ConvertCooldown.selector, vm.getBlockTimestamp() + COOLDOWN)
+        );
         vault.convertEthToUsdg(MAX_CONVERT, floor);
         vm.prank(guardian);
         vault.setPaused(true);
-        vm.warp(block.timestamp + COOLDOWN);
+        vm.warp(vm.getBlockTimestamp() + COOLDOWN);
         vm.prank(keeper);
         vm.expectRevert(WarchestVault.IsPaused.selector);
         vault.convertEthToUsdg(MAX_CONVERT, floor);

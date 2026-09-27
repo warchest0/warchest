@@ -38,6 +38,8 @@ export interface RunData {
   entryOids?: number[];
   filledSize?: string;
   avgEntryPx?: string;
+  /** Protection attempts already made (cloids derived from it). */
+  protectAttempts?: number;
   stopLossOid?: number;
   takeProfitOid?: number;
   stopLossPx?: string;

@@ -19,6 +19,7 @@ npm run keeper run  # boucle
 npm run keeper status
 npm run keeper monitor [once]   # moniteur indépendant (code 2 si un constat rouge)
 npm run keeper kill [raison]    # kill switch : cancel all + clôture reduce-only (MODE=live)
+npm run keeper return-plan [usdc] # plan de retour pour le multisig (lecture seule)
 npx tsx scripts/sigproof.ts     # preuve de signature contre le testnet HL (clé jetable, 5 requêtes)
 ```
 
@@ -105,6 +106,17 @@ est alerté (une fois par condition continue) et, avec `MONITOR_KILL=1` en mode 
   Le keeper ne signe rien de tout cela.
 - **Sans testnet Across (D6)** : l'intégration `test/live.integration.test.ts` fait tourner une décision complète
   sur anvil avec le vrai vault et le `MockAcrossSpokePool` (dépôt réel, `release()` pour simuler le retour).
+
+## Retour, rapports, kill switch (S5.4)
+- `reportPosition(decisionId, equity)` toutes les `REPORT_INTERVAL_MS` (6 h) pendant `holding`, equity = `accountValue`
+  du compte de trading. Purement informatif côté vault (fenêtre de contestation du guardian).
+- `mustClose()` (pause guardian, clôture votée, décision supplantée) ⇒ `closing` : cancel + reduce-only IOC ⇒
+  `closed_on_hl` ⇒ `RETURN PLAN` (alerte critique, `keeper status`, `keeper return-plan`) ⇒ `awaiting_return`.
+- `reportClosed` uniquement quand `balance − usdgLedger ≥ RETURN_TOLERANCE_BPS × equity finale` (ou
+  `FORCE_REPORT_CLOSED_ID`), `finalizeClose` après la fenêtre, `reconcile` pour les morceaux tardifs.
+- Kill switch : `keeper kill`, le moniteur (`MONITOR_KILL=1`), ou automatiquement quand une protection est
+  invérifiable / un levier non conforme. Alertes : console + `ALERT_WEBHOOK_URL` (POST JSON, jamais bloquant).
+- Procédures d'incident : **`RUNBOOK.md`**.
 
 ## Cycle de vie d'une décision (`src/keeper.ts`, persisté dans SQLite)
 ```

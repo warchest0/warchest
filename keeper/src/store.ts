@@ -50,9 +50,13 @@ export interface RunData {
   lastReportedEquity?: string;
   closeReason?: string;
   closedOnHlAt?: number;
+  /** True when the decision was closed before any position was opened: the bridged USDC must come back in full. */
+  noTrade?: boolean;
   /** Equity (USDC, 6 decimals) at the time the position was closed on Hyperliquid = the return expected in the vault. */
   finalEquity?: string;
   returnPlanIssuedAt?: number;
+  /** Text of the return plan issued to the multisig. */
+  returnPlan?: string;
   returnTxHashes?: string[];
   reportClosedTxHash?: string;
   reportClosedAt?: number;

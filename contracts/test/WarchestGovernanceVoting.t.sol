@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {IWarchestDecisionSource} from "../src/interfaces/IWarchestDecisionSource.sol";
 import {WarchestGovernance} from "../src/WarchestGovernance.sol";
 import {GovernanceFixture} from "./utils/GovernanceFixture.sol";
 
@@ -62,9 +63,9 @@ contract WarchestGovernanceVotingTest is GovernanceFixture {
         vm.prank(guardian);
         gov.setEligibleAssets(next);
         assertEq(gov.roundAssets(id).length, 3);
-        (uint32 asset, WarchestGovernance.Direction d) = gov.decodeOption(id, 5);
+        (uint32 asset, IWarchestDecisionSource.Side d) = gov.decodeOption(id, 5);
         assertEq(asset, SOL);
-        assertEq(uint8(d), uint8(WarchestGovernance.Direction.Short));
+        assertEq(uint8(d), uint8(IWarchestDecisionSource.Side.Short));
     }
 
     function test_start_onlyOneActiveDirectionRound() public {
@@ -106,9 +107,9 @@ contract WarchestGovernanceVotingTest is GovernanceFixture {
 
     function test_vote_tallies() public {
         uint256 id = gov.startDirectionRound(EPOCH);
-        _vote(id, 0, _opt(0, WarchestGovernance.Direction.Long));
-        _vote(id, 1, _opt(1, WarchestGovernance.Direction.Short));
-        _vote(id, 2, _opt(0, WarchestGovernance.Direction.Long));
+        _vote(id, 0, _opt(0, IWarchestDecisionSource.Side.Long));
+        _vote(id, 1, _opt(1, IWarchestDecisionSource.Side.Short));
+        _vote(id, 2, _opt(0, IWarchestDecisionSource.Side.Long));
         assertEq(gov.tally(id, 0), 550);
         assertEq(gov.tally(id, 3), 300);
         assertEq(gov.getRound(id).totalVoted, 850);

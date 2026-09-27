@@ -46,6 +46,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      # the integration test deploys the real WarchestGovernance on anvil
+      - run: forge build
+        working-directory: contracts
       - uses: actions/setup-node@v4
         with:
           node-version: 24

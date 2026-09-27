@@ -34,6 +34,12 @@ export interface Config {
   allowedAssets: string[];
   /** Max distance from the mid price accepted for an IOC entry/exit, in bps. */
   entrySlippageBps: number;
+  /** Slippage bound of the kill switch / emergency flatten, in bps. */
+  killSlippageBps: number;
+  /** Limit price room of a triggered market stop/TP below/above its trigger, in bps. */
+  triggerLimitBps: number;
+  /** Dead-man switch delay armed around the entry order, ms. */
+  deadManMs: number;
   /** Extra discount below the on-chain TWAP floor the keeper is willing to accept on a conversion, in bps. */
   convertSlippageBps: number;
   /** Below this ETH balance (wei) the keeper does not bother converting. */
@@ -130,6 +136,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hlTradingAccount: env.HL_TRADING_ACCOUNT ? getAddress(env.HL_TRADING_ACCOUNT) : hlAccount,
     allowedAssets,
     entrySlippageBps: bps(env, "ENTRY_SLIPPAGE_BPS", 50, 500),
+    killSlippageBps: bps(env, "KILL_SLIPPAGE_BPS", 200, 2000),
+    triggerLimitBps: bps(env, "TRIGGER_LIMIT_BPS", 1000, 3000),
+    deadManMs: Number(env.DEADMAN_MS ?? "120000"),
     convertSlippageBps: bps(env, "CONVERT_SLIPPAGE_BPS", 30, 1000),
     minConvertWei: BigInt(env.MIN_CONVERT_WEI ?? "100000000000000000"),
     acrossApiUrl: env.ACROSS_API_URL ?? "https://app.across.to/api",

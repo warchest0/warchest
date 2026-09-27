@@ -17,6 +17,9 @@ npm run smoke       # lecture seule LIVE : RPC Robinhood mainnet, Hyperliquid /i
 npm run keeper once # un tick (dry-run par défaut)
 npm run keeper run  # boucle
 npm run keeper status
+npm run keeper monitor [once]   # moniteur indépendant (code 2 si un constat rouge)
+npm run keeper kill [raison]    # kill switch : cancel all + clôture reduce-only (MODE=live)
+npx tsx scripts/sigproof.ts     # preuve de signature contre le testnet HL (clé jetable, 5 requêtes)
 ```
 
 ## Modes
@@ -41,6 +44,50 @@ Configuration : voir `.env.example`.
   est aplatie.
 - **Retour des fonds** : `reportClosed` n'est envoyé qu'une fois ≥ `RETURN_TOLERANCE_BPS` de l'equity attendue
   revenue sur le vault (`balance − usdgLedger`), ou avec l'override explicite `FORCE_REPORT_CLOSED_ID`.
+
+## Signature Hyperliquid (S5.2) : signer maison, pas de SDK
+Le keeper n'utilise **pas** `@nktkas/hyperliquid` (4 dépendances transitives, WebSocket, et surtout un client qui
+expose `withdraw3`, `usdSend`, `approveAgent`… dans le même objet). Il embarque un signer minimal
+(`src/hyperliquid/msgpack.ts` ≈ 120 lignes, `signer.ts` ≈ 120 lignes) :
+- hash d'action = `keccak256(msgpack(action) ‖ nonce ‖ vaultAddress? ‖ expiresAfter?)`, phantom agent
+  `{source: "a"|"b", connectionId}`, domaine EIP-712 `Exchange` / chainId 1337 ;
+- **allowlist** dans `AgentSigner.sign` : `order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`,
+  `updateLeverage`, `updateIsolatedMargin`, `scheduleCancel`. Tout autre type est refusé avant hachage, ainsi que
+  tout champ d'action user-signed (`signatureChainId`, `destination`, `amount`, `agentAddress`, `builder`…). Le
+  domaine `HyperliquidSignTransaction` n'existe nulle part dans le code.
+- Vérifié bit à bit contre les vecteurs du SDK Python officiel (`tests/signing_test.py` : dummy, order, order+cloid,
+  vault, TP/SL, mainnet et testnet) et contre l'encodeur `@msgpack/msgpack` (différentiel).
+
+**Preuve contre le testnet** (`scripts/sigproof.ts`, 2026-09-27) : une clé aléatoire jamais approuvée signe des
+actions et les poste sur `api.hyperliquid-testnet.xyz/exchange` ; l'API répond
+`User or API Wallet 0x… does not exist.` avec **l'adresse qu'elle a recouvrée** :
+```
+PASS order (no vault, no expiry)                     recovered = ours
+PASS order + expiresAfter                            recovered = ours
+PASS order + vaultAddress (sub-account) + expiresAfter recovered = ours
+PASS updateLeverage isolated 3x + vaultAddress       recovered = ours
+PASS tampered nonce (contrôle négatif)               recovered ≠ ours
+```
+
+## Moteur de trading (S5.2, `src/hyperliquid/engine.ts`)
+- `open` : `updateLeverage(isolated)` → arme `scheduleCancel` → **un** ordre IOC borné en prix, `cloid` déterministe
+  `(décision, "entry", tentative)` → désarme → relit la position : mode isolé et levier vérifiés, sinon
+  aplatissement. Un `cloid` déjà connu de l'API n'est **jamais renvoyé** (redémarrage entre envoi et persistance).
+- `protect` : stop (obligatoire) et take-profit (optionnel) en triggers **reduce-only**, grouping `positionTpsl`,
+  côté opposé, prix limite à `TRIGGER_LIMIT_BPS` du trigger, puis **relecture** dans `frontendOpenOrders`
+  (coin, trigger, reduce-only, côté, prix, taille). Non relu ⇒ `verified=false` ⇒ le keeper aplatit.
+- `close` : cancel des ordres du coin + IOC reduce-only ; `killSwitch` : cancel de **tous** les ordres + clôture
+  reduce-only de **toutes** les positions, alerte si quelque chose subsiste.
+- ⚠ **Dead-man switch** : `scheduleCancel` annule *tous* les ordres, **y compris le stop-loss**. Il n'est donc armé
+  qu'autour de l'ordre d'entrée et désarmé avant de poser le stop ; si le désarmement échoue après un fill, la
+  position est aplatie. Il ne doit jamais rester armé sur une position protégée (et l'API le réserve aux comptes
+  ayant un volume suffisant : l'armement est *best effort*).
+
+## Moniteur indépendant (`src/monitor.ts`)
+Ne partage aucun état avec la boucle. À chaque passage il vérifie : position sur le coin de la décision uniquement,
+côté, marge isolée, levier = `riskParams`, valeur ≤ capital × levier (+5 %), stop reduce-only présent et pas plus
+loin que `stopLossBps`, aucun ordre non reduce-only, agent approuvé et non expirant, `mustClose`. Un constat rouge
+est alerté (une fois par condition continue) et, avec `MONITOR_KILL=1` en mode live, déclenche le kill switch.
 
 ## Cycle de vie d'une décision (`src/keeper.ts`, persisté dans SQLite)
 ```

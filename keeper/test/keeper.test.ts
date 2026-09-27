@@ -285,3 +285,39 @@ describe("Keeper: position lifecycle", () => {
     expect(sink.alerts.some((a) => a.title.includes("expires soon"))).toBe(true);
   });
 });
+
+describe("Keeper: S5.4 return path details", () => {
+  it("a superseded decision closes with the right reason and persists the return plan text", async () => {
+    const h = harness();
+    h.chain.v = baseVault({ position: openPosition(), mustClose: true, lastExecutedDecisionId: 1n });
+    h.chain.g = baseGov({ decision: { ...baseGov().decision, id: 2n } });
+    h.store.startRun(1n, "holding", {});
+    h.hl.state = { accountValue: "99900", totalMarginUsed: "97466", withdrawable: "2000", positions: [{ coin: "ETH", szi: "108", leverageType: "isolated", leverage: 3, entryPx: "2693", positionValue: "1", unrealizedPnl: "0", marginUsed: "1" }] };
+    expect((await h.keeper.tick()).stage).toBe("closed_on_hl");
+    expect(h.store.getRun(1n)?.data.closeReason).toBe("decision superseded");
+    h.hl.state = { accountValue: "99850", totalMarginUsed: "0", withdrawable: "99850", positions: [] };
+    h.exec.results.returnInstructions = { done: true, note: "RETURN PLAN decision 1: 99850.00 USDC" };
+    expect((await h.keeper.tick()).stage).toBe("awaiting_return");
+    expect(h.store.getRun(1n)?.data.returnPlan).toContain("RETURN PLAN");
+  });
+  it("mustClose before any trade expects the whole bridged output back, not the (empty) account value", async () => {
+    const h = harness();
+    h.chain.v = baseVault({ position: openPosition(), mustClose: true, paused: true, lastExecutedDecisionId: 1n });
+    h.store.startRun(1n, "funding", { outputAmount: USD(99_940).toString() });
+    expect((await h.keeper.tick()).stage).toBe("awaiting_return");
+    expect(h.store.getRun(1n)?.data).toMatchObject({ noTrade: true, finalEquity: USD(99_940).toString() });
+    expect((h.exec.calls.at(-1)!.args[0] as { equity: bigint }).equity).toBe(USD(99_940));
+    // nothing back yet → no reportClosed
+    expect((await h.keeper.tick()).stage).toBe("awaiting_return");
+    expect(h.exec.methods()).not.toContain("reportClosed");
+  });
+  it("a total loss (nothing on HL) still reaches reportClosed: expected return 0", async () => {
+    const h = harness();
+    h.chain.v = baseVault({ position: openPosition(), lastExecutedDecisionId: 1n });
+    h.store.startRun(1n, "holding", {});
+    h.hl.state = { accountValue: "0", totalMarginUsed: "0", withdrawable: "0", positions: [] };
+    expect((await h.keeper.tick()).stage).toBe("closed_on_hl");
+    expect((await h.keeper.tick()).stage).toBe("awaiting_return");
+    expect((await h.keeper.tick()).stage).toBe("report_closed");
+  });
+});

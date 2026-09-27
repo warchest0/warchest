@@ -136,7 +136,9 @@ export class TradingEngine {
       const s = await this.info.orderStatus(this.opts.tradingAccount, cloid);
       return s.status === "order" && s.state === "open" ? s.order.oid : undefined;
     };
-    slOid = await existing(slCloid);
+    // a stop that already matches the plan (e.g. placed before a restart / adopted position) is reused, never doubled
+    const resting = await this.info.frontendOpenOrders(this.opts.tradingAccount);
+    slOid = resting.find((o) => isStopFor(o, plan))?.oid ?? (await existing(slCloid));
     if (slOid === undefined) {
       specs.push({
         asset: plan.asset,
@@ -149,7 +151,8 @@ export class TradingEngine {
       });
     }
     if (plan.takeProfitPx) {
-      tpOid = await existing(tpCloid);
+      const tpPx = plan.takeProfitPx;
+      tpOid = resting.find((o) => o.coin === plan.coin && o.isTrigger && o.reduceOnly && o.orderType.toLowerCase().includes("take profit") && cmpDecimals(o.triggerPx, tpPx) === 0)?.oid ?? (await existing(tpCloid));
       if (tpOid === undefined) {
         specs.push({
           asset: plan.asset,

@@ -110,6 +110,16 @@ describe("TradingEngine.protect", () => {
     expect(r.verified).toBe(true);
     expect(s.sim.actions()).toEqual([]);
   });
+  it("reuses a matching resting stop / take-profit placed under unknown cloids (adopted position)", async () => {
+    s.hl.orders.push(
+      { coin: "ETH", side: "A", limitPx: "0", sz: "108.5662", origSz: "108.5662", oid: 77, timestamp: 0, isTrigger: true, triggerPx: "2571", triggerCondition: "", isPositionTpsl: true, reduceOnly: true, orderType: "Stop Market", tif: null, cloid: null },
+      { coin: "ETH", side: "A", limitPx: "0", sz: "108.5662", origSz: "108.5662", oid: 78, timestamp: 0, isTrigger: true, triggerPx: "2796.5", triggerCondition: "", isPositionTpsl: true, reduceOnly: true, orderType: "Take Profit Market", tif: null, cloid: null },
+    );
+    const r = await s.engine.protect(protectPlan, s.run);
+    expect(r).toMatchObject({ verified: true, stopLossOid: 77, takeProfitOid: 78 });
+    expect(s.sim.actions()).toEqual([]);
+    expect(s.hl.orders).toHaveLength(2);
+  });
   it("stop only when the take-profit trigger is disabled", async () => {
     const r = await s.engine.protect({ ...protectPlan, takeProfitPx: undefined }, s.run);
     expect(r.verified).toBe(true);

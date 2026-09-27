@@ -30,7 +30,7 @@ cd ../keeper && npm ci && npm test   # keeper
 ## Workflow
 Work branches → pull request into `staging` (test environment) → `staging` is promoted to `main` (production).
 
-`scripts/ship.sh <branch> "<commit message>" [--promote]` runs the whole flow: commit, push, PR into `staging`, merge, and optionally promote `staging` to `main`.
+`scripts/ship.sh <branch> "<commit message>" [--promote]` runs the whole flow: commit, push, PR into `staging`, merge, and optionally promote `staging` to `main`. It always acts as the repository owner account (`gh auth token --user <owner>`), whatever account is active in `gh`.
 
 ## Status
 Code complete for the MVP and tested on forks of Robinhood Chain mainnet. Not yet deployed, not yet externally audited. See `STATUS.md`.

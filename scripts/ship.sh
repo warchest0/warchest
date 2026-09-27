@@ -22,6 +22,19 @@ footer=$'\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
 
 cd "$(git rev-parse --show-toplevel)"
 
+# Always act as the repository owner, whatever account is currently active in `gh`
+# (several accounts may be logged in, and another tool may switch the active one).
+owner="$(git remote get-url origin | sed -E 's#.*github\.com[:/]([^/]+)/.*#\1#')"
+GH_TOKEN="$(gh auth token --hostname github.com --user "$owner")" || {
+  echo "gh is not logged in as $owner: run 'gh auth login' with that account" >&2
+  exit 1
+}
+export GH_TOKEN
+git_as_owner() {
+  git -c credential.helper= \
+    -c "credential.helper=!f() { echo username=x-access-token; echo password=\$GH_TOKEN; }; f" "$@"
+}
+
 # Waits for the PR's checks. Returns 0 when they pass or when none exist, 1 when they fail.
 checks_ok() {
   local url="$1" out
@@ -44,11 +57,11 @@ if [ -z "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-git fetch -q origin
+git_as_owner fetch -q origin
 git checkout -q -b "$branch"
 git add -A
 git commit -q -m "${message}${trailer}"
-git push -q -u origin "$branch"
+git_as_owner push -q -u origin "$branch"
 
 url="$(gh pr create --base staging --head "$branch" --title "$message" \
   --body "Merges \`$branch\` into \`staging\`.${footer}")"
@@ -58,7 +71,7 @@ gh pr merge "$url" --merge --delete-branch
 echo "✓ merged into staging"
 
 git checkout -q staging
-git pull -q origin staging
+git_as_owner pull -q origin staging
 git branch -D -q "$branch" 2>/dev/null || true
 
 if [ "$promote" = "--promote" ]; then
@@ -68,8 +81,8 @@ if [ "$promote" = "--promote" ]; then
   checks_ok "$url" || exit 1
   gh pr merge "$url" --merge # staging is never deleted
   echo "✓ promoted staging to main"
-  git fetch -q origin
+  git_as_owner fetch -q origin
   git checkout -q main
-  git pull -q origin main
+  git_as_owner pull -q origin main
   git checkout -q staging
 fi

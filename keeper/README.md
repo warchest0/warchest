@@ -24,8 +24,9 @@ npx tsx scripts/sigproof.ts     # preuve de signature contre le testnet HL (clé
 
 ## Modes
 - **`MODE=dry-run`** (défaut) : lit tout, calcule et logge chaque action prévue (`WOULD …`), ne signe rien.
-- **`MODE=live`** : signe les tx du vault avec `KEEPER_PRIVATE_KEY` et les actions L1 Hyperliquid avec
-  `HL_AGENT_PRIVATE_KEY`. Refusé sur Robinhood mainnet sans `ALLOW_MAINNET=1`. Câblé par S5.2–S5.4.
+- **`MODE=live`** : signe les tx du vault avec `KEEPER_PRIVATE_KEY` (`src/chain/writer.ts`, chaque tx est
+  **simulée** avant envoi : rien n'est diffusé si le vault reverterait) et les actions L1 Hyperliquid avec
+  `HL_AGENT_PRIVATE_KEY`. Refusé sur Robinhood mainnet sans `ALLOW_MAINNET=1`.
 
 Configuration : voir `.env.example`.
 
@@ -88,6 +89,22 @@ Ne partage aucun état avec la boucle. À chaque passage il vérifie : position 
 côté, marge isolée, levier = `riskParams`, valeur ≤ capital × levier (+5 %), stop reduce-only présent et pas plus
 loin que `stopLossBps`, aucun ordre non reduce-only, agent approuvé et non expirant, `mustClose`. Un constat rouge
 est alerté (une fois par condition continue) et, avec `MONITOR_KILL=1` en mode live, déclenche le kill switch.
+
+## Bridge Across (S5.3, `src/across/bridge.ts`)
+- **Aller** : exécuté par le vault lui-même (`executeDecision`, destinataire immuable). Le keeper choisit
+  `amount = min(cap 20 % NAV, ledger, maxDepositInstant)`, prend `outputAmount / timestamp / fillDeadline` sur
+  `/suggested-fees`, vérifie `outputAmount ≥ amount × (1 − maxBridgeFeeBps)`, la fenêtre de `quoteTimestamp`
+  (1 h), `fillDeadline ≤ 6 h` et `≥ MIN_FILL_MARGIN_SEC`, et que le SpokePool de la quote est celui du vault.
+- **Suivi** : `/deposit/status` combiné à `balance − usdgLedger` du vault (`classifyDeposit`) : un remboursement
+  de dépôt expiré est détecté sur la chaîne même si l'API est en retard ; un dépôt expiré est signalé et le keeper
+  attend le remboursement du SpokePool (depositor = vault), puis clôt la décision sans trader.
+- **Retour** (`planReturn`) : `withdrawable` du compte de trading → découpage par `/limits` de la route
+  `999 USDC → 4663 USDG` (≈ 246 k$ instantané le 2026-09-27), quote indicative par morceau, et la liste des étapes
+  que **le multisig** doit signer (`subAccountTransfer` → `usdClassTransfer` → `spotSend` vers l'adresse système
+  `0x2000…0000` → dépôts Across sur HyperEVM avec `recipient = vault`), plus l'alternative `withdraw3` → Arbitrum.
+  Le keeper ne signe rien de tout cela.
+- **Sans testnet Across (D6)** : l'intégration `test/live.integration.test.ts` fait tourner une décision complète
+  sur anvil avec le vrai vault et le `MockAcrossSpokePool` (dépôt réel, `release()` pour simuler le retour).
 
 ## Cycle de vie d'une décision (`src/keeper.ts`, persisté dans SQLite)
 ```

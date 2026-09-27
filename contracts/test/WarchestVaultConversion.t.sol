@@ -42,22 +42,22 @@ contract WarchestVaultConversionTest is VaultFixture {
         WarchestVault.Venue memory v = _venue();
         WarchestVault.ConversionParams memory p = _conversionParams();
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(address(0), keeper, v, p);
+        _newVault(address(0), keeper, v, p);
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, address(0), v, p);
+        _newVault(guardian, address(0), v, p);
 
         WarchestVault.Venue memory bad = v;
         bad.pool = IUniswapV3PoolMinimal(address(0));
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, bad, p);
+        _newVault(guardian, keeper, bad, p);
         bad = v;
         bad.weth = IWETH9(address(0));
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, bad, p);
+        _newVault(guardian, keeper, bad, p);
         bad = v;
         bad.usdg = IERC20(address(0));
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, bad, p);
+        _newVault(guardian, keeper, bad, p);
     }
 
     function test_constructor_revertsPoolMismatch() public {
@@ -65,39 +65,39 @@ contract WarchestVaultConversionTest is VaultFixture {
         WarchestVault.Venue memory v = _venue();
         v.pool = IUniswapV3PoolMinimal(address(flipped));
         vm.expectRevert(WarchestVault.PoolMismatch.selector);
-        new WarchestVault(guardian, keeper, v, _conversionParams());
+        _newVault(guardian, keeper, v, _conversionParams());
 
         MockUniswapV3Pool other = new MockUniswapV3Pool(address(weth), address(0xBEEF));
         v.pool = IUniswapV3PoolMinimal(address(other));
         vm.expectRevert(WarchestVault.PoolMismatch.selector);
-        new WarchestVault(guardian, keeper, v, _conversionParams());
+        _newVault(guardian, keeper, v, _conversionParams());
     }
 
     function test_constructor_revertsInvalidParams() public {
         WarchestVault.ConversionParams memory p = _conversionParams();
         p.twapWindow = 0;
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, _venue(), p);
+        _newVault(guardian, keeper, _venue(), p);
 
         p = _conversionParams();
         p.maxSlippageBps = 0;
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, _venue(), p);
+        _newVault(guardian, keeper, _venue(), p);
 
         p = _conversionParams();
         p.maxSlippageBps = 1001;
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, _venue(), p);
+        _newVault(guardian, keeper, _venue(), p);
 
         p = _conversionParams();
         p.maxConvertPerCall = 0;
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, _venue(), p);
+        _newVault(guardian, keeper, _venue(), p);
 
         // cooldown 0 is allowed
         p = _conversionParams();
         p.convertCooldown = 0;
-        new WarchestVault(guardian, keeper, _venue(), p);
+        _newVault(guardian, keeper, _venue(), p);
     }
 
     // ---------------------------------------------------------------------------------------------------------------

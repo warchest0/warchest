@@ -110,3 +110,6 @@ L'avis juridique (D7) se mène **en parallèle dès la semaine 1**.
 
 ## Flux git
 `feat/*` → PR vers `staging` (environnement de test) → merge. `staging` → `main` = production. Pipelines CI/CD à ajouter plus tard (staging et prod).
+
+## État
+Voir `STATUS.md` (mis à jour le 2026-09-27).

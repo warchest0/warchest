@@ -1,0 +1,29 @@
+{
+  "name": "@warchest/indexer",
+  "version": "1.0.0",
+  "description": "WARCHEST off-chain indexer: LIFO lots, holder levels, daily weight merkle roots",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run",
+    "indexer": "tsx src/cli.ts",
+    "bench": "tsx bench/scale.ts"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "viem": "^2.56.9"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  }
+}

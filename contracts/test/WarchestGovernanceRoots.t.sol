@@ -20,6 +20,7 @@ contract WarchestGovernanceRootsTest is Test {
     }
 
     function setUp() public {
+        vm.warp(1_700_000_000); // epochs are UTC day indices bounded by block.timestamp / 1 days + 1
         gov = new WarchestGovernance(guardian, updater, _params());
     }
 
@@ -112,6 +113,7 @@ contract WarchestGovernanceRootsTest is Test {
         _submit(3, bytes32(uint256(1)));
         vm.prank(guardian);
         gov.revokeWeightRoot(3);
+        assertEq(gov.latestEpoch(), 0);
         _submit(3, bytes32(uint256(2)));
         assertEq(gov.weightRoot(3).root, bytes32(uint256(2)));
         assertFalse(gov.weightRoot(3).revoked);
@@ -119,16 +121,12 @@ contract WarchestGovernanceRootsTest is Test {
         assertTrue(gov.isRootUsable(3));
     }
 
-    function test_setUpdater() public {
-        address next = makeAddr("next");
+    function test_proposeUpdater_onlyGuardian() public {
         vm.expectRevert(WarchestGovernance.NotGuardian.selector);
-        gov.setUpdater(next);
+        gov.proposeUpdater(makeAddr("next"));
         vm.prank(guardian);
-        gov.setUpdater(next);
-        assertEq(gov.updater(), next);
-        vm.prank(updater);
-        vm.expectRevert(WarchestGovernance.NotUpdater.selector);
-        gov.submitWeightRoot(1, bytes32(uint256(1)), 1, 0);
+        vm.expectRevert(WarchestGovernance.ZeroAddress.selector);
+        gov.proposeUpdater(address(0));
     }
 
     function test_guardianTwoStepTransfer() public {

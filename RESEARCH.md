@@ -14,7 +14,7 @@
 | Vault (cap 20%, stop-loss) | **Oui, partiellement** | Le cap 20% est enforçable on-chain. Le **stop-loss ne l'est pas** depuis Robinhood Chain : il vit sur Hyperliquid (trigger orders). |
 | Agent Hyperliquid sans retrait | **Oui** [V] | Enforcé par le schéma de signature du protocole. 2 actions ambiguës à tester (voir §2). |
 | Bridge Across RH ↔ Hyperliquid | **Oui, mais pas comme décrit** | Pas d'USDC natif sur RH (USDG), pas de route directe vers HyperCore, **pas de testnet Across**, retour plafonné ~278k$/transfert. |
-| E2E complet sur testnet | **Non tel quel** | Ni Uniswap v4 ni Across sur le testnet RH → v4 à déployer nous-mêmes, bridge simulé sur testnet. |
+| E2E complet sur testnet | **Partiel** | v4 est bien sur le testnet RH (mêmes adresses). En revanche Across n'a pas de testnet, donc le bridge est simulé. |
 | Planning 6 semaines | **Non** | Réaliste : 12–16 semaines, dont 4–8 semaines d'audit. |
 | Juridique | **Risque majeur** | Le partage de profits ressemble fortement à un contrat d'investissement (Howey) / OPC (UE). |
 
@@ -43,7 +43,11 @@ Annonce : https://blog.uniswap.org/robinhood-chain-is-live — adresses : https:
 | StateView | `0xf3334192d15450cdd385c8b70e03f9a6bd9e673b` |
 | Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
 
-- ⚠️ **Aucun déploiement v4 sur le testnet 46630** (ni officiel ni tiers trouvé). On devra déployer v4-core nous-mêmes sur le testnet, et faire les tests d'intégration en **fork mainnet** Foundry. Le RPC public le permet, et Stakd le fait déjà.
+- ✅ **CORRECTION (vérifié le 2026-09-27, après la recherche initiale)** : v4 **est** déployé sur le testnet 46630, **aux mêmes adresses** que sur le mainnet.
+  - PoolManager, Quoter et StateView ont un **bytecode identique** au mainnet (comparaison des hash sha256 de `cast code`).
+  - PositionManager et UniversalRouter sont présents, avec un bytecode différent (immutables propres au testnet).
+  - Permit2 et le déployeur CREATE2 `0x4e59…956C` sont présents aussi.
+  - Le script de lancement complet (`contracts/script/DeployWarchest.s.sol`) a été exécuté avec succès sur un fork testnet et un fork mainnet.
 
 ### 1.3 ABI et comportement du hook [V]
 Sources : `v4-core/src/libraries/Hooks.sol`, `IHooks.sol`, `types/BeforeSwapDelta.sol`, `LPFeeLibrary.sol`.

@@ -35,3 +35,18 @@ Le PoolManager v4, le token et la gouvernance sont toujours exclus.
 ## Format de l'arbre
 - Feuilles `(chainid, governance, epoch, account, weight)`, au format OpenZeppelin `StandardMerkleTree`. C'est bit pour bit la même chose que `WarchestGovernance.leaf`, et c'est vérifié par un test d'intégration sur anvil.
 - `treeHash = keccak256(dump JSON canonique)` est publié on-chain avec le root.
+
+## Montée en charge (S4.4, mesurée en local)
+| Holders | Transferts | Snapshot | Arbre | Dump | Profondeur des preuves |
+|---|---|---|---|---|---|
+| 10 000 | 59 824 | 0,16 s | 1,9 s | — | 14 |
+| 100 000 | 598 492 | 2,2 s | 19,3 s | 29,4 Mo (heap 396 Mo) | 17 |
+
+Coût on-chain constant, quel que soit le nombre de holders : un `submitWeightRoot` par jour (≈ 44,6 k gas, soit ≈ 0,003 $). Voir RESEARCH §4.2.
+
+Benchmark : `npm run bench [holders] [achats par holder]`.
+
+## Distribution (module D7)
+`src/distribution.ts` :
+- `addDistribution` répartit chaque financement du distributor au prorata des poids du snapshot. Les parts sont arrondies à l'unité inférieure, donc la somme distribuée ne dépasse jamais le montant financé.
+- `buildDistributionTree` produit l'arbre **cumulé**, avec des feuilles identiques à `WarchestDistributor.leaf`.

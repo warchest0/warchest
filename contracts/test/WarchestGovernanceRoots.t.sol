@@ -12,8 +12,15 @@ contract WarchestGovernanceRootsTest is Test {
     address updater = makeAddr("updater");
     WarchestGovernance gov;
 
+    function _params() internal pure returns (WarchestGovernance.Params memory) {
+        return
+            WarchestGovernance.Params({
+                challengeWindow: WINDOW, votingPeriod: 1 days, maxRootAge: 2 days, quorumBps: 1000
+            });
+    }
+
     function setUp() public {
-        gov = new WarchestGovernance(guardian, updater, WINDOW);
+        gov = new WarchestGovernance(guardian, updater, _params());
     }
 
     function _submit(uint64 epoch, bytes32 root) internal {
@@ -23,9 +30,9 @@ contract WarchestGovernanceRootsTest is Test {
 
     function test_constructor_rejectsZero() public {
         vm.expectRevert(WarchestGovernance.ZeroAddress.selector);
-        new WarchestGovernance(address(0), updater, WINDOW);
+        new WarchestGovernance(address(0), updater, _params());
         vm.expectRevert(WarchestGovernance.ZeroAddress.selector);
-        new WarchestGovernance(guardian, address(0), WINDOW);
+        new WarchestGovernance(guardian, address(0), _params());
     }
 
     function test_submit_onlyUpdater() public {

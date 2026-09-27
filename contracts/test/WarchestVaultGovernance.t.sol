@@ -45,6 +45,7 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
             guardian,
             keeper,
             IWarchestDecisionSource(address(gov)),
+            address(0), // distribution disabled (D7 open)
             WarchestVault.Venue({
                 pool: IUniswapV3PoolMinimal(address(pool)), weth: IWETH9(address(weth)), usdg: IERC20(address(usdg))
             }),
@@ -63,7 +64,8 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
                 maxDecisionAge: 3 days,
                 stopLossBps: 500,
                 leverage: 3,
-                takeProfitBps: 1_000
+                takeProfitBps: 1_000,
+                reportChallengeWindow: 6 hours
             })
         );
         vm.prank(guardian);
@@ -89,7 +91,10 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
     function _execute(uint256 amount) internal {
         vm.prank(keeper);
         vault.executeDecision(
-            amount, amount * (BPS - 50) / BPS, uint32(block.timestamp), uint32(block.timestamp) + FILL_WINDOW
+            amount,
+            amount * (BPS - 50) / BPS,
+            uint32(vm.getBlockTimestamp()),
+            uint32(vm.getBlockTimestamp()) + FILL_WINDOW
         );
     }
 
@@ -112,7 +117,7 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
 
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(WarchestVault.DecisionAlreadyExecuted.selector, 1, 1));
-        vault.executeDecision(1, 1, uint32(block.timestamp), uint32(block.timestamp) + FILL_WINDOW);
+        vault.executeDecision(1, 1, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + FILL_WINDOW);
     }
 
     /// Quorum missed → same decision id stands (D8) → the vault refuses to re-execute it.
@@ -129,7 +134,7 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
 
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(WarchestVault.DecisionAlreadyExecuted.selector, 1, 1));
-        vault.executeDecision(1, 1, uint32(block.timestamp), uint32(block.timestamp) + FILL_WINDOW);
+        vault.executeDecision(1, 1, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + FILL_WINDOW);
     }
 
     /// A new quorate decision supersedes the open position: the keeper must close first; the new id cannot execute
@@ -147,7 +152,53 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
 
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(WarchestVault.PositionOpen.selector, 1));
-        vault.executeDecision(1, 1, uint32(block.timestamp), uint32(block.timestamp) + FILL_WINDOW);
+        vault.executeDecision(1, 1, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + FILL_WINDOW);
+    }
+
+    /// Full cycle on the real governance: decision → order → matured profit report → close vote (allowed only
+    /// through `closeVoteAllowed`) → `isCloseRequested` → keeper closes, funds return, close finalized → next
+    /// decision on a fresh snapshot executes.
+    function test_fullLifecycleWithCloseVote() public {
+        _decideEthShort();
+        uint256 amount = vault.maxOrderAmount();
+        _execute(amount);
+
+        vm.expectRevert(abi.encodeWithSelector(WarchestGovernance.CloseVoteNotAllowed.selector, 1));
+        gov.startCloseRound(EPOCH);
+
+        vm.prank(keeper);
+        vault.reportPosition(1, amount + amount * 2_000 / BPS); // +20%, threshold is +10%
+        vm.warp(vm.getBlockTimestamp() + 6 hours);
+        assertTrue(vault.closeVoteAllowed(1));
+
+        uint256 closeRound = gov.startCloseRound(EPOCH);
+        _vote(closeRound, 0, 1);
+        _vote(closeRound, 1, 1);
+        vm.warp(gov.getRound(closeRound).endsAt);
+        gov.finalize(closeRound);
+        assertTrue(gov.isCloseRequested(1));
+        assertTrue(vault.mustClose());
+        assertFalse(vault.closeVoteAllowed(1));
+
+        vm.prank(keeper);
+        vault.reportClosed(1);
+        usdg.mint(address(vault), amount + 3_000e6); // bridged back with profit
+        vm.warp(vm.getBlockTimestamp() + 6 hours);
+        vault.finalizeClose(1);
+        assertEq(vault.cumulativePnl(), 3_000e6);
+        assertEq(vault.position().decisionId, 0);
+        assertEq(vault.distributable(), 3_000e6);
+
+        // the first snapshot is stale by now: publish a new one and decide again
+        _publish(EPOCH + 1);
+        uint256 r = gov.startDirectionRound(EPOCH + 1);
+        _vote(r, 0, _opt(0, IWarchestDecisionSource.Side.Long));
+        vm.warp(gov.getRound(r).endsAt);
+        gov.finalize(r);
+        assertEq(gov.currentDecision().id, 2);
+        _execute(1_000e6);
+        assertEq(vault.position().decisionId, 2);
+        assertEq(vault.position().asset, BTC);
     }
 
     /// Staleness is judged from the round's `endsAt`.
@@ -157,6 +208,8 @@ contract WarchestVaultGovernanceTest is GovernanceFixture {
         vm.warp(endsAt + 3 days + 1);
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(WarchestVault.DecisionStale.selector, 1, endsAt));
-        vault.executeDecision(1_000e6, 999e6, uint32(block.timestamp), uint32(block.timestamp) + FILL_WINDOW);
+        vault.executeDecision(
+            1_000e6, 999e6, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + FILL_WINDOW
+        );
     }
 }

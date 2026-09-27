@@ -88,6 +88,7 @@ contract WarchestVaultForkTest is Test {
             guardian,
             keeper,
             IWarchestDecisionSource(address(gov)),
+            address(0), // distribution disabled (D7 open)
             WarchestVault.Venue({pool: POOL, weth: WETH, usdg: USDG}),
             WarchestVault.Bridge({
                 spokePool: SPOKE,
@@ -107,7 +108,8 @@ contract WarchestVaultForkTest is Test {
                 maxDecisionAge: 3 days,
                 stopLossBps: 500,
                 leverage: 3,
-                takeProfitBps: 1_000
+                takeProfitBps: 1_000,
+                reportChallengeWindow: 6 hours
             })
         );
     }
@@ -269,7 +271,7 @@ contract WarchestVaultForkTest is Test {
     function test_fork_spokePoolWiring() public onlyFork {
         assertEq(SPOKE.depositQuoteTimeBuffer(), 3600);
         assertEq(SPOKE.fillDeadlineBuffer(), 21_600);
-        assertEq(SPOKE.getCurrentTime(), block.timestamp);
+        assertEq(SPOKE.getCurrentTime(), vm.getBlockTimestamp());
         console2.log("SpokePool numberOfDeposits", SPOKE.numberOfDeposits());
     }
 
@@ -286,8 +288,8 @@ contract WarchestVaultForkTest is Test {
         uint256 out = amount * (BPS - 10) / BPS; // 10 bp bridge fee, like the live quotes (RESEARCH.md §3.2: ~6 bp)
         uint32 depositId = SPOKE.numberOfDeposits();
         uint256 spokeBefore = USDG.balanceOf(address(SPOKE));
-        uint32 quoteTs = uint32(block.timestamp);
-        uint32 fillDeadline = uint32(block.timestamp) + 4 hours;
+        uint32 quoteTs = uint32(vm.getBlockTimestamp());
+        uint32 fillDeadline = uint32(vm.getBlockTimestamp()) + 4 hours;
         console2.log("bridging USDG", amount);
 
         vm.expectEmit(true, true, true, true, address(SPOKE));
@@ -331,10 +333,12 @@ contract WarchestVaultForkTest is Test {
         uint256 amount = 100e6;
         vm.prank(keeper);
         vm.expectRevert(); // InvalidQuoteTimestamp in the real SpokePool
-        vault.executeDecision(amount, amount, uint32(block.timestamp) + 1, uint32(block.timestamp) + 4 hours);
+        vault.executeDecision(
+            amount, amount, uint32(vm.getBlockTimestamp()) + 1, uint32(vm.getBlockTimestamp()) + 4 hours
+        );
         vm.prank(keeper);
         vm.expectRevert(); // InvalidFillDeadline in the real SpokePool
-        vault.executeDecision(amount, amount, uint32(block.timestamp), uint32(block.timestamp) + 21_601);
+        vault.executeDecision(amount, amount, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + 21_601);
         assertEq(vault.position().decisionId, 0);
         assertEq(vault.lastExecutedDecisionId(), 0);
     }

@@ -7,7 +7,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {TransientSlot} from "@openzeppelin/contracts/utils/TransientSlot.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {IWarchestDecisionSource} from "./interfaces/IWarchestDecisionSource.sol";
+import {IWarchestDecisionSource, IWarchestVaultView} from "./interfaces/IWarchestDecisionSource.sol";
 import {WarchestGovernance} from "./WarchestGovernance.sol";
 import {IUniswapV3PoolMinimal, IUniswapV3SwapCallback} from "./interfaces/external/IUniswapV3PoolMinimal.sol";
 import {IWETH9} from "./interfaces/external/IWETH9.sol";
@@ -47,7 +47,16 @@ interface IWarchestRoundSource {
 ///      Stop-loss / take-profit cannot be enforced from Robinhood Chain (RESEARCH.md §2.5): the immutable risk
 ///      parameters are published here and emitted with every order; the keeper must apply them as Hyperliquid
 ///      trigger orders, and an independent monitor must check that it did.
-contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
+///
+///      Reports (S3.3): the keeper reports the mark-to-market equity of the Hyperliquid account; a report only
+///      counts after `reportChallengeWindow` unless the guardian revoked it. Closing is also a keeper report under
+///      the same challenge window, but the amount that came back is NEVER declared by the keeper: it is the USDG
+///      balance delta (`balance − usdgLedger`) measured when the close is finalized. Realized PnL accumulates in
+///      `cumulativePnl`; `highWaterMark` is the level of cumulative PnL already distributed, so `distributable()`
+///      is only profit above it, and only while no position is open. Hook fee inflows and ETH price moves are
+///      treasury principal, not trading profit, so they never become distributable. The distributor (S3.4, D7) is
+///      immutable and may be `address(0)` = distribution permanently disabled for this deployment.
+contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using TransientSlot for *;
 
@@ -100,6 +109,8 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
         uint8 leverage;
         /// Profit (bps of capital) above which a close vote may be opened (S3.3).
         uint16 takeProfitBps;
+        /// Delay before a keeper report (equity or close) counts, during which the guardian can revoke it.
+        uint64 reportChallengeWindow;
     }
 
     /// @notice The single position the treasury may have open.
@@ -113,6 +124,17 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
         uint64 openedAt;
         /// Across deposit id of the outbound transfer.
         uint256 depositId;
+        /// Timestamp of the keeper's close report; 0 = not closing. The close is final `reportChallengeWindow` later.
+        uint64 closeReportedAt;
+    }
+
+    /// @notice A keeper equity report for a position.
+    struct Report {
+        /// Mark-to-market equity of the Hyperliquid account for this position (USDC, 6 decimals).
+        uint256 equity;
+        /// 0 = no report.
+        uint64 reportedAt;
+        bool revoked;
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -148,6 +170,9 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
     uint16 public immutable stopLossBps;
     uint8 public immutable leverage;
     uint16 public immutable takeProfitBps;
+    uint64 public immutable reportChallengeWindow;
+    /// @notice The only address that may pull distributable profit (S3.4). `address(0)` = disabled forever.
+    address public immutable distributor;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Roles
@@ -176,6 +201,16 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
     ///         executed (or older than one that was): each decision runs AT MOST ONCE (D8).
     uint256 public lastExecutedDecisionId;
     Position internal _position;
+    /// @notice Latest keeper equity report per decision (may still be inside its challenge window or revoked).
+    mapping(uint256 decisionId => Report) internal _lastReport;
+    /// @notice Last report of each decision that survived its challenge window before being superseded.
+    mapping(uint256 decisionId => Report) internal _finalReport;
+    /// @notice Σ (returned − capital) over closed positions, plus late returns. Can be negative.
+    int256 public cumulativePnl;
+    /// @notice Cumulative PnL already distributed. Monotonic. Profit is distributable only above it.
+    uint256 public highWaterMark;
+    /// @notice Decision id of the most recently closed position (late returns are attributed to it).
+    uint256 public lastClosedDecisionId;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Events & errors
@@ -200,6 +235,16 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
     event GuardianChanged(address indexed previous, address indexed current);
     event KeeperChanged(address indexed previous, address indexed current);
     event Paused(bool paused);
+    event PositionReported(uint256 indexed decisionId, uint256 equity, uint64 reportedAt, uint64 finalAt);
+    event ReportRevoked(uint256 indexed decisionId, uint256 equity);
+    event CloseReported(uint256 indexed decisionId, uint64 reportedAt, uint64 finalAt);
+    event CloseReportRevoked(uint256 indexed decisionId);
+    event PositionClosed(
+        uint256 indexed decisionId, uint256 capital, uint256 returned, int256 pnl, int256 cumulativePnl
+    );
+    event LateReturn(uint256 indexed decisionId, uint256 amount, int256 cumulativePnl);
+    event Donation(uint256 amount);
+    event Distributed(address indexed to, uint256 amount, uint256 highWaterMark);
 
     error ZeroAddress();
     error NotGuardian();
@@ -225,15 +270,26 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
     error InvalidOutputAmount(uint256 outputAmount, uint256 amount);
     error InvalidFillDeadline(uint32 fillDeadline);
     error BridgeAmountMismatch(uint256 expected, uint256 actual);
+    error NoSuchPosition(uint256 decisionId);
+    error PositionClosing(uint256 decisionId);
+    error NotClosing(uint256 decisionId);
+    error ReportNotRevocable(uint256 decisionId);
+    error ChallengeWindowOpen(uint256 finalAt);
+    error NotDistributor();
+    error ExceedsDistributable(uint256 amount, uint256 distributable);
+    error NothingToReconcile();
 
     // ---------------------------------------------------------------------------------------------------------------
     // Construction
     // ---------------------------------------------------------------------------------------------------------------
 
+    /// @param distributor_ S3.4 distributor allowed to pull {distributable}; `address(0)` disables distribution
+    ///        for the lifetime of this deployment (D7 is still open).
     constructor(
         address guardian_,
         address keeper_,
         IWarchestDecisionSource governance_,
+        address distributor_,
         Venue memory venue,
         Bridge memory bridge,
         ConversionParams memory cp,
@@ -255,7 +311,7 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
         if (
             bridge.destinationChainId == 0 || op.capBps == 0 || op.capBps > MAX_CAP_BPS
                 || op.maxBridgeFeeBps > MAX_BRIDGE_FEE_BPS || op.maxDecisionAge == 0 || op.stopLossBps == 0
-                || op.stopLossBps >= BPS || op.leverage == 0 || op.takeProfitBps == 0
+                || op.stopLossBps >= BPS || op.leverage == 0 || op.takeProfitBps == 0 || op.reportChallengeWindow == 0
         ) revert InvalidParams();
 
         guardian = guardian_;
@@ -278,6 +334,8 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
         stopLossBps = op.stopLossBps;
         leverage = op.leverage;
         takeProfitBps = op.takeProfitBps;
+        reportChallengeWindow = op.reportChallengeWindow;
+        distributor = distributor_;
         emit GuardianChanged(address(0), guardian_);
         emit KeeperChanged(address(0), keeper_);
     }
@@ -423,7 +481,8 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
             side: d.side,
             capital: amount,
             openedAt: uint64(block.timestamp),
-            depositId: depositId
+            depositId: depositId,
+            closeReportedAt: 0
         });
         usdgLedger -= amount;
         _bridge(amount, outputAmount, quoteTimestamp, fillDeadline);
@@ -501,6 +560,149 @@ contract WarchestVault is IUniswapV3SwapCallback, ReentrancyGuardTransient {
     /// @notice Risk parameters the keeper must apply on Hyperliquid for every position.
     function riskParams() external view returns (uint16 stopLoss, uint8 lev, uint16 takeProfit) {
         return (stopLossBps, leverage, takeProfitBps);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Reports, close, PnL (S3.3)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /// @notice Keeper mark-to-market report of the Hyperliquid account for the open position. Counts only after
+    ///         `reportChallengeWindow`, unless the guardian revokes it in the meantime. A new report replaces the
+    ///         pending one (and restarts the window); a pending report that already matured is kept as the final
+    ///         report of the position until a newer one matures.
+    /// @param decisionId Must be the open position's decision id (not closing).
+    /// @param equityUsd Equity in USDC (6 decimals). Informational: it gates close votes, never moves funds.
+    function reportPosition(uint256 decisionId, uint256 equityUsd) external onlyKeeper whenNotPaused {
+        _requireOpen(decisionId);
+        Report storage last = _lastReport[decisionId];
+        if (_isFinal(last)) _finalReport[decisionId] = last;
+        uint64 now_ = uint64(block.timestamp);
+        _lastReport[decisionId] = Report({equity: equityUsd, reportedAt: now_, revoked: false});
+        emit PositionReported(decisionId, equityUsd, now_, now_ + reportChallengeWindow);
+    }
+
+    /// @notice Guardian veto on the pending equity report of `decisionId`, while its challenge window is open.
+    function revokeReport(uint256 decisionId) external onlyGuardian {
+        Report storage last = _lastReport[decisionId];
+        if (last.reportedAt == 0 || last.revoked || block.timestamp >= uint256(last.reportedAt) + reportChallengeWindow)
+        {
+            revert ReportNotRevocable(decisionId);
+        }
+        last.revoked = true;
+        emit ReportRevoked(decisionId, last.equity);
+    }
+
+    /// @notice Equity that currently counts for `decisionId`: the latest report that survived its challenge window.
+    /// @return equity USDC (6 decimals); 0 if none.
+    /// @return exists False when no report has matured yet.
+    function finalizedEquity(uint256 decisionId) public view returns (uint256 equity, bool exists) {
+        Report storage last = _lastReport[decisionId];
+        if (_isFinal(last)) return (last.equity, true);
+        Report storage final_ = _finalReport[decisionId];
+        return (final_.equity, final_.reportedAt != 0);
+    }
+
+    /// @inheritdoc IWarchestVaultView
+    /// @dev Never reverts (governance calls it inside `startCloseRound`). False while closing, once the position
+    ///      must close anyway (superseded, close requested, paused) and below the take-profit threshold.
+    function closeVoteAllowed(uint256 decisionId) external view returns (bool) {
+        Position storage p = _position;
+        if (decisionId == 0 || p.decisionId != decisionId || p.closeReportedAt != 0 || mustClose()) return false;
+        (uint256 equity, bool exists) = finalizedEquity(decisionId);
+        return exists && equity >= p.capital + p.capital * takeProfitBps / BPS;
+    }
+
+    /// @notice Keeper declares the position closed on Hyperliquid and its funds bridged back. Allowed while paused
+    ///         (bringing funds home is always desirable). The amount that came back is NOT a parameter: it is
+    ///         measured on-chain by {finalizeClose} after the guardian's challenge window.
+    function reportClosed(uint256 decisionId) external onlyKeeper {
+        _requireOpen(decisionId);
+        uint64 now_ = uint64(block.timestamp);
+        _position.closeReportedAt = now_;
+        emit CloseReported(decisionId, now_, now_ + reportChallengeWindow);
+    }
+
+    /// @notice Guardian veto on a pending close report (e.g. the keeper declared a close while the position is
+    ///         still open on Hyperliquid). The position goes back to "open".
+    function revokeCloseReport(uint256 decisionId) external onlyGuardian {
+        Position storage p = _position;
+        if (p.decisionId != decisionId || decisionId == 0 || p.closeReportedAt == 0) revert NotClosing(decisionId);
+        if (block.timestamp >= uint256(p.closeReportedAt) + reportChallengeWindow) {
+            revert ReportNotRevocable(decisionId);
+        }
+        p.closeReportedAt = 0;
+        emit CloseReportRevoked(decisionId);
+    }
+
+    /// @notice Finalizes a close after its challenge window. Permissionless. `returned` = every USDG that entered
+    ///         the vault from outside since the last accounting (`balance − usdgLedger`): the bridge return, an
+    ///         Across refund of an expired deposit, or nothing at all if the position was liquidated / stopped out
+    ///         with nothing left. Realized PnL = returned − capital. The vault is never bricked by a total loss.
+    function finalizeClose(uint256 decisionId) external nonReentrant {
+        Position storage p = _position;
+        if (p.decisionId != decisionId || decisionId == 0 || p.closeReportedAt == 0) revert NotClosing(decisionId);
+        uint256 finalAt = uint256(p.closeReportedAt) + reportChallengeWindow;
+        if (block.timestamp < finalAt) revert ChallengeWindowOpen(finalAt);
+
+        uint256 returned = usdg.balanceOf(address(this)) - usdgLedger;
+        uint256 capital = p.capital;
+        usdgLedger += returned;
+        int256 pnl = int256(returned) - int256(capital);
+        cumulativePnl += pnl;
+        lastClosedDecisionId = decisionId;
+        delete _position;
+        emit PositionClosed(decisionId, capital, returned, pnl, cumulativePnl);
+    }
+
+    /// @notice Accounts USDG that arrived while no position is open: a late chunk of the last position's return
+    ///         (counted as its PnL) or, if nothing was ever closed, a donation (principal, not PnL). Keeper only:
+    ///         it can only ever INCREASE the accounted balance.
+    function reconcile() external onlyKeeper {
+        if (_position.decisionId != 0) revert PositionOpen(_position.decisionId);
+        uint256 stray = usdg.balanceOf(address(this)) - usdgLedger;
+        if (stray == 0) revert NothingToReconcile();
+        usdgLedger += stray;
+        if (lastClosedDecisionId != 0) {
+            cumulativePnl += int256(stray);
+            emit LateReturn(lastClosedDecisionId, stray, cumulativePnl);
+        } else {
+            emit Donation(stray);
+        }
+    }
+
+    /// @notice Realized profit above the high-water mark that a distributor could pull: 0 while a position is
+    ///         open, while cumulative PnL is at or below the mark, and never more than the accounted USDG.
+    function distributable() public view returns (uint256) {
+        if (_position.decisionId != 0 || cumulativePnl <= int256(highWaterMark)) return 0;
+        uint256 above = uint256(cumulativePnl) - highWaterMark;
+        return above < usdgLedger ? above : usdgLedger;
+    }
+
+    /// @notice Hook point for the S3.4 distributor: pulls `amount ≤ distributable()` and raises the high-water mark
+    ///         by the same amount. Reverts for everyone when `distributor == address(0)`.
+    function pullDistributable(uint256 amount) external whenNotPaused nonReentrant {
+        if (msg.sender != distributor || distributor == address(0)) revert NotDistributor();
+        uint256 available = distributable();
+        if (amount == 0 || amount > available) revert ExceedsDistributable(amount, available);
+        highWaterMark += amount;
+        usdgLedger -= amount;
+        usdg.safeTransfer(distributor, amount);
+        emit Distributed(distributor, amount, highWaterMark);
+    }
+
+    /// @notice Latest keeper equity report for `decisionId` (pending, matured or revoked).
+    function lastReport(uint256 decisionId) external view returns (Report memory) {
+        return _lastReport[decisionId];
+    }
+
+    function _requireOpen(uint256 decisionId) internal view {
+        Position storage p = _position;
+        if (decisionId == 0 || p.decisionId != decisionId) revert NoSuchPosition(decisionId);
+        if (p.closeReportedAt != 0) revert PositionClosing(decisionId);
+    }
+
+    function _isFinal(Report storage r) internal view returns (bool) {
+        return r.reportedAt != 0 && !r.revoked && block.timestamp >= uint256(r.reportedAt) + reportChallengeWindow;
     }
 
     // ---------------------------------------------------------------------------------------------------------------

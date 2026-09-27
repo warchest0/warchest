@@ -34,3 +34,43 @@ Le script déroule, dans l'ordre :
 - Ne **jamais** initialiser le pool via la multicall du PositionManager : le hook exige `sender == initializer`.
 - Le pool est protégé contre un front-run de l'initialisation, puisque seul `initializer` peut l'appeler. En revanche le **prix initial** reste celui choisi par le déployeur, donc à vérifier deux fois.
 - Hook allowlist : voir `HOOKLIST.md`. Sans validation, l'app et l'API Uniswap ne routent pas le pool.
+
+---
+
+# Déploiement du système complet (S3.5)
+
+`script/DeploySystem.s.sol` déploie et relie tout, dans le seul ordre valide :
+1. Gouvernance.
+2. Distributor, si activé.
+3. Vault.
+4. `governance.setVault`, puis `setEligibleAssets` (BTC, ETH, SOL), puis `distributor.setVault`.
+5. Token, hook (dont le destinataire des fees est le vault qui vient d'être déployé), pool et liquidité.
+6. Lancement du **transfert du rôle guardian** vers le multisig.
+
+```bash
+export GUARDIAN=0x...   # multisig
+export UPDATER=0x...    # indexer
+export KEEPER=0x...     # bot
+export HL_ACCOUNT=0x... # compte Hyperliquid (multisig natif HL, D4) — IMMUTABLE dans le vault
+export ENABLE_DISTRIBUTOR=false   # D7 : à trancher après l'avis juridique
+forge script script/DeploySystem.s.sol --rpc-url robinhood --account <keystore> --broadcast --verify
+```
+
+Une fois le script terminé, le multisig doit appeler `acceptGuardian()` sur la gouvernance, le vault et le distributor.
+
+**Vérifié** par `test/fork/SystemCycleFork.t.sol`, sur un fork du mainnet 4663 avec le vrai PoolManager v4, le vrai pool v3 WETH/USDG et le vrai SpokePool Across. Le test déroule :
+1. déploiement et branchement ;
+2. achat de 20 ETH, qui envoie 2 ETH de fee au vault ;
+3. conversion en ≈ 5 394 USDG au prix TWAP ;
+4. snapshot, vote, quorum, décision 1 ;
+5. ordre ≤ 20 % de la NAV, avec un vrai dépôt Across ;
+6. round sans quorum : on garde le même id, et rien n'est exécuté (D8) ;
+7. nouvelle décision : `mustClose` passe à vrai ;
+8. clôture, retour des fonds à +25 %, PnL comptabilisé ;
+9. financement du distributor, puis claim.
+
+Seules la jambe Hyperliquid et le fill retour du bridge sont simulés. Ils seront couverts en S5.
+
+Réseau de test :
+- Le PoolManager et le SpokePool ne posent pas de problème : v4 est présent sur 46630 et `MockAcrossSpokePool` remplace le SpokePool (D6).
+- En revanche, il n'y a pas de pool v3 WETH/USDG sur le testnet. L'E2E testnet (S5.5) devra donc déployer un pool WETH/USDG mock avec son oracle.

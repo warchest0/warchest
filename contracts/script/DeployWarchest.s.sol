@@ -58,7 +58,7 @@ contract DeployWarchest is DeployWarchestHook {
 
     error LpAmountExceedsSupply();
 
-    function run() external override returns (WarchestHook) {
+    function run() external virtual override returns (WarchestHook) {
         Config memory cfg = loadConfig();
         vm.startBroadcast();
         (, address deployer,) = vm.readCallers();
@@ -76,10 +76,15 @@ contract DeployWarchest is DeployWarchestHook {
     }
 
     function loadConfig() public view returns (Config memory cfg) {
+        cfg = loadConfigWithVault(vm.envAddress("WARCHEST_VAULT"));
+    }
+
+    /// @notice Same as {loadConfig} but with an explicit fee recipient (used by DeploySystem).
+    function loadConfigWithVault(address vault) public view returns (Config memory cfg) {
         cfg.poolManager = IPoolManager(vm.envOr("POOL_MANAGER", 0x8366a39CC670B4001A1121B8F6A443A643e40951));
         cfg.positionManager = IPositionManager(vm.envOr("POSITION_MANAGER", 0x58daec3116aae6D93017bAAea7749052E8a04fA7));
         cfg.permit2 = IAllowanceTransfer(vm.envOr("PERMIT2", 0x000000000022D473030F116dDEE9F6B43aC78BA3));
-        cfg.vault = vm.envAddress("WARCHEST_VAULT");
+        cfg.vault = vault;
         cfg.name = vm.envOr("TOKEN_NAME", string("Warchest"));
         cfg.symbol = vm.envOr("TOKEN_SYMBOL", string("WAR"));
         cfg.supply = vm.envOr("TOKEN_SUPPLY", uint256(1_000_000_000 ether));

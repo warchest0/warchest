@@ -14,14 +14,25 @@
 ## Bornes de sécurité
 - `totalCumulative ≤ totalFunded`, et ne diminue jamais.
 - `totalClaimed ≤ totalCumulative` du root actif. Un arbre sous-déclaré ne peut donc que bloquer les derniers claimers, jamais faire sortir plus que prévu.
-- Le guardian ne peut **jamais** déplacer de fonds. Ses seuls pouvoirs sont `setVault` (une seule fois), `setUpdater`, `revokePendingRoot` et le transfert de son rôle en deux étapes.
+- Le guardian ne peut **jamais** déplacer de fonds. Ses seuls pouvoirs sont `setVault` (une seule fois), `proposeUpdater` / `cancelUpdaterChange`, `revokePendingRoot` et le transfert de son rôle en deux étapes.
+
+## Rotation de l'updater (revue de sécurité, constat haut, corrigé)
+Avant : `setUpdater` était instantané. Le guardian seul pouvait se nommer updater, proposer un root qui lui versait tout le profit financé, et personne d'autre que lui ne pouvait révoquer ce root : après le timelock, `acceptRoot` et `claim` étaient permissionless. Violation directe de D9 (« le guardian ne déplace jamais de fonds »).
+
+Maintenant, calqué sur `WarchestGovernance` :
+- `proposeUpdater(next)` (guardian) émet `UpdaterChangeProposed(next, readyAt)` avec `readyAt = now + updaterDelay`, où **`updaterDelay = timelock + 3 jours`** (immutable, 4 jours avec le timelock recommandé de 1 jour).
+- `cancelUpdaterChange()` (guardian) annule ; `applyUpdaterChange()` est **permissionless** une fois `readyAt` atteint. L'ancien updater garde son rôle pendant tout le préavis.
+- Un root proposé par le nouvel updater attend encore son propre `timelock`.
+
+Confiance résiduelle, documentée : après ce préavis public de ≥ 4 jours, puis le timelock du root, la paire guardian + updater peut encore mal répartir le profit **déjà financé** (jamais le principal, le vault ne cède que `distributable()`). L'attaque la plus rapide est donc annoncée on-chain pendant `updaterDelay + timelock ≥ 5 jours` (`UpdaterChangeProposed`, `UpdaterChanged`, `RootProposed` avec `treeHash`), ce que le vérificateur indépendant détecte et ce qui laisse le temps de contester le multisig. Aucune borne on-chain supplémentaire n'a été retenue : un plafond par compte ou par root n'est pas sain (le guardian peut fractionner sur des adresses qu'il contrôle, et une répartition légitime peut concentrer les droits sur un gros holder).
 
 ## Tests
-`test/WarchestDistributor.t.sol` : 13 tests branchés sur le **vrai** `WarchestVault`. Couverts :
+`test/WarchestDistributor.t.sol` : 15 tests branchés sur le **vrai** `WarchestVault`, plus `test_regression_distributorGuardianCannotStealFundedProfit` dans `WarchestVaultReviewRegression.t.sol`. Couverts :
 - profit, perte, HWM ;
 - timelock et révocation ;
 - impossibilité de relancer le délai ;
 - claims cumulés sur deux cycles ;
 - preuves falsifiées ;
 - arbre sous-déclaré ;
-- guardian sans pouvoir sur les fonds.
+- guardian sans pouvoir sur les fonds ni sur les roots ;
+- rotation de l'updater : délai, annulation, application permissionless, événements, PoC du vol rejoué.

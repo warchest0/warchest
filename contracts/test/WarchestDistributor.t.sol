@@ -28,6 +28,7 @@ contract WarchestDistributorTest is VaultFixture {
     }
 
     function _closeWithProfit(uint256 profit) internal {
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW); // minimum position age before a keeper-initiated close
         vm.prank(keeper);
         vault.reportClosed(decisionId);
         usdg.mint(address(vault), capital + profit); // bridged back
@@ -228,12 +229,77 @@ contract WarchestDistributorTest is VaultFixture {
     function test_guardianCannotMoveFunds() public {
         _closeWithProfit(10_000e6);
         dist.fund();
-        // the guardian's whole surface: none of these transfer tokens
+        // the guardian's whole surface: none of these transfer tokens, and none lets it publish a root
         vm.startPrank(guardian);
-        dist.setUpdater(guardian);
+        dist.proposeUpdater(guardian);
+        dist.cancelUpdaterChange();
+        dist.proposeUpdater(guardian);
         dist.transferGuardian(guardian);
+        vm.expectRevert(WarchestDistributor.NotUpdater.selector);
+        dist.proposeRoot(bytes32(uint256(1)), 1, 0);
         vm.stopPrank();
         assertEq(usdg.balanceOf(address(dist)), 10_000e6);
+        assertEq(dist.updater(), updater);
+    }
+
+    // ------------------------------------------------------------------ updater rotation (review HIGH)
+
+    function test_updaterRotation_delayedPublicPermissionless() public {
+        address next = makeAddr("nextUpdater");
+        uint64 readyAt = uint64(vm.getBlockTimestamp()) + dist.updaterDelay();
+        assertEq(dist.updaterDelay(), TIMELOCK + 3 days);
+
+        vm.expectRevert(WarchestDistributor.NotGuardian.selector);
+        dist.proposeUpdater(next);
+        vm.prank(guardian);
+        vm.expectRevert(WarchestDistributor.ZeroAddress.selector);
+        dist.proposeUpdater(address(0));
+        vm.expectRevert(WarchestDistributor.NoPendingUpdater.selector);
+        dist.applyUpdaterChange();
+        vm.prank(guardian);
+        vm.expectRevert(WarchestDistributor.NoPendingUpdater.selector);
+        dist.cancelUpdaterChange();
+
+        vm.expectEmit(true, false, false, true, address(dist));
+        emit WarchestDistributor.UpdaterChangeProposed(next, readyAt);
+        vm.prank(guardian);
+        dist.proposeUpdater(next);
+        assertEq(dist.pendingUpdater(), next);
+        assertEq(dist.pendingUpdaterReadyAt(), readyAt);
+
+        vm.warp(readyAt - 1);
+        vm.expectRevert(abi.encodeWithSelector(WarchestDistributor.UpdaterDelayNotElapsed.selector, readyAt));
+        dist.applyUpdaterChange();
+        assertEq(dist.updater(), updater, "old updater keeps the role during the notice");
+
+        vm.warp(readyAt);
+        vm.expectEmit(true, true, false, true, address(dist));
+        emit WarchestDistributor.UpdaterChanged(updater, next);
+        vm.prank(attacker); // permissionless
+        dist.applyUpdaterChange();
+        assertEq(dist.updater(), next);
+        assertEq(dist.pendingUpdater(), address(0));
+        assertEq(dist.pendingUpdaterReadyAt(), 0);
+    }
+
+    function test_updaterRotation_cancelAndReproposeRestartsDelay() public {
+        address next = makeAddr("nextUpdater");
+        vm.prank(guardian);
+        dist.proposeUpdater(next);
+        vm.warp(vm.getBlockTimestamp() + dist.updaterDelay() - 1);
+        vm.expectEmit(true, false, false, true, address(dist));
+        emit WarchestDistributor.UpdaterChangeCancelled(next);
+        vm.prank(guardian);
+        dist.cancelUpdaterChange();
+        vm.expectRevert(WarchestDistributor.NoPendingUpdater.selector);
+        dist.applyUpdaterChange();
+
+        uint64 readyAt = uint64(vm.getBlockTimestamp()) + dist.updaterDelay();
+        vm.prank(guardian);
+        dist.proposeUpdater(next);
+        vm.warp(readyAt - 1);
+        vm.expectRevert(abi.encodeWithSelector(WarchestDistributor.UpdaterDelayNotElapsed.selector, readyAt));
+        dist.applyUpdaterChange();
     }
 
     function test_leafDomainSeparated() public {

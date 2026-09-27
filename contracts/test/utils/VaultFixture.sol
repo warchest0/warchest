@@ -138,12 +138,14 @@ abstract contract VaultFixture is Test {
         );
     }
 
-    /// Funds 100 ETH, converts 50 ETH, mints decision 1 (BTC long) and executes the max order.
+    /// Funds 100 ETH, converts 50 ETH, mints decision 1 (BTC long), executes the max order and lets the position
+    /// reach the minimum age (`reportChallengeWindow`) after which the keeper may close it on its own.
     function _openPosition() internal returns (uint256 decisionId, uint256 capital) {
         _fund(attacker, 100 ether);
         _convert(MAX_CONVERT, vault.twapFloor(MAX_CONVERT));
         decisionId = gov.nextDecision(BTC, IWarchestDecisionSource.Side.Long);
         capital = vault.maxOrderAmount();
         _execute(capital);
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW);
     }
 }

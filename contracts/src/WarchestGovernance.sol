@@ -69,7 +69,13 @@ contract WarchestGovernance is IWarchestDecisionSource {
     uint64 public immutable maxRootAge;
     uint16 public immutable quorumBps;
 
+    /// @notice Delay between proposing and applying a new updater (challengeWindow + votingPeriod + maxRootAge):
+    ///         the guardian can never swap in its own updater and forge weights inside a single round (D9).
+    uint64 public immutable updaterDelay;
+
     uint256 public constant MAX_ASSETS = 16;
+    /// @notice Upper bound on a snapshot's total weight so that quorum math can never overflow.
+    uint256 public constant MAX_TOTAL_WEIGHT = type(uint256).max / 10_000;
     uint16 internal constant BPS = 10_000;
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -82,6 +88,9 @@ contract WarchestGovernance is IWarchestDecisionSource {
     address public updater;
     /// @notice Guardian handover target (two-step transfer).
     address public pendingGuardian;
+    /// @notice Proposed updater and the earliest time it can be applied (see `updaterDelay`).
+    address public pendingUpdater;
+    uint64 public pendingUpdaterReadyAt;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Weight roots
@@ -91,6 +100,9 @@ contract WarchestGovernance is IWarchestDecisionSource {
     /// @notice Highest epoch ever submitted; new submissions must be strictly greater (except resubmitting a revoked
     ///         latest epoch).
     uint64 public latestEpoch;
+    /// @notice Epoch that was `latestEpoch` when `epoch` was submitted: a linked list used to roll back on revocation
+    ///         and to find the newest usable snapshot.
+    mapping(uint64 epoch => uint64) public prevEpoch;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Rounds
@@ -110,6 +122,8 @@ contract WarchestGovernance is IWarchestDecisionSource {
     mapping(uint256 roundId => uint32[]) internal _roundAssets;
     mapping(uint256 roundId => mapping(uint256 option => uint256 weight)) public tally;
     mapping(uint256 roundId => mapping(address account => bool)) public hasVoted;
+    /// @notice Rounds overlapped by a guardian pause or cancelled by the guardian: they can only fall back.
+    mapping(uint256 roundId => bool) public voided;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Decisions
@@ -127,13 +141,25 @@ contract WarchestGovernance is IWarchestDecisionSource {
     event WeightRootSubmitted(uint64 indexed epoch, bytes32 root, uint256 totalWeight, bytes32 treeHash);
     event WeightRootRevoked(uint64 indexed epoch, bytes32 root);
     event UpdaterChanged(address indexed previous, address indexed current);
+    event UpdaterChangeProposed(address indexed proposed, uint64 readyAt);
+    event UpdaterChangeCancelled(address indexed proposed);
+    /// @notice The round can no longer mint a decision or request a close (pause overlap or guardian cancel).
+    event RoundVoided(uint256 indexed roundId);
     event GuardianTransferStarted(address indexed current, address indexed pending);
     event GuardianChanged(address indexed previous, address indexed current);
     event EligibleAssetsSet(uint32[] assets);
     event Paused(bool paused);
     event RoundStarted(uint256 indexed roundId, RoundKind kind, uint64 epoch, uint64 endsAt, uint256 targetDecisionId);
     event VoteCast(uint256 indexed roundId, address indexed voter, uint256 option, uint256 weight);
-    event RoundFinalized(uint256 indexed roundId, bool quorate, uint256 winningOption, uint256 winningWeight);
+    event RoundFinalized(
+        uint256 indexed roundId,
+        bool quorate,
+        bool valid,
+        uint256 winningOption,
+        uint256 winningWeight,
+        uint256 totalVoted,
+        uint256 totalWeight
+    );
     event DecisionMade(uint256 indexed decisionId, uint32 asset, Side side, uint256 indexed roundId);
     /// @notice Quorum missed or tie: the previous decision (possibly none) stands unchanged (D8).
     event FallbackToPreviousDecision(uint256 indexed roundId, uint256 indexed standingDecisionId);
@@ -147,6 +173,11 @@ contract WarchestGovernance is IWarchestDecisionSource {
     error EpochNotIncreasing(uint64 epoch, uint64 latest);
     error EmptyRoot();
     error RootNotRevocable(uint64 epoch);
+    error EpochInFuture(uint64 epoch);
+    error InvalidTotalWeight();
+    error NotLatestSnapshot(uint64 epoch, uint64 latestUsable);
+    error NoPendingUpdater();
+    error UpdaterDelayNotElapsed(uint64 readyAt);
     error InvalidParams();
     error InvalidAssets();
     error IsPaused();
@@ -180,6 +211,7 @@ contract WarchestGovernance is IWarchestDecisionSource {
         votingPeriod = params.votingPeriod;
         maxRootAge = params.maxRootAge;
         quorumBps = params.quorumBps;
+        updaterDelay = params.challengeWindow + params.votingPeriod + params.maxRootAge;
         emit GuardianChanged(address(0), guardian_);
         emit UpdaterChanged(address(0), updater_);
     }
@@ -203,10 +235,30 @@ contract WarchestGovernance is IWarchestDecisionSource {
     // Role management
     // ---------------------------------------------------------------------------------------------------------------
 
-    function setUpdater(address updater_) external onlyGuardian {
+    /// @notice Starts a delayed updater rotation. Publicly visible for `updaterDelay` before it can be applied.
+    function proposeUpdater(address updater_) external onlyGuardian {
         if (updater_ == address(0)) revert ZeroAddress();
-        emit UpdaterChanged(updater, updater_);
-        updater = updater_;
+        pendingUpdater = updater_;
+        pendingUpdaterReadyAt = uint64(block.timestamp) + updaterDelay;
+        emit UpdaterChangeProposed(updater_, pendingUpdaterReadyAt);
+    }
+
+    function cancelUpdaterChange() external onlyGuardian {
+        if (pendingUpdater == address(0)) revert NoPendingUpdater();
+        emit UpdaterChangeCancelled(pendingUpdater);
+        pendingUpdater = address(0);
+        pendingUpdaterReadyAt = 0;
+    }
+
+    /// @notice Applies a proposed updater once its delay has elapsed. Permissionless.
+    function applyUpdaterChange() external {
+        address next = pendingUpdater;
+        if (next == address(0)) revert NoPendingUpdater();
+        if (block.timestamp < pendingUpdaterReadyAt) revert UpdaterDelayNotElapsed(pendingUpdaterReadyAt);
+        emit UpdaterChanged(updater, next);
+        updater = next;
+        pendingUpdater = address(0);
+        pendingUpdaterReadyAt = 0;
     }
 
     function transferGuardian(address pending) external onlyGuardian {
@@ -214,9 +266,24 @@ contract WarchestGovernance is IWarchestDecisionSource {
         emit GuardianTransferStarted(guardian, pending);
     }
 
+    /// @notice Emergency stop. Pausing VOIDS every round still running, so the guardian can never freeze a tally
+    ///         at a convenient moment and let it finalize later (D9): a voided round can only fall back.
     function setPaused(bool paused_) external onlyGuardian {
         paused = paused_;
+        if (paused_) {
+            _voidIfRunning(activeRound[RoundKind.Direction]);
+            _voidIfRunning(activeRound[RoundKind.Close]);
+        }
         emit Paused(paused_);
+    }
+
+    /// @notice Guardian veto on a round: it can only make it fall back, never choose its outcome.
+    function cancelRound(uint256 roundId) external onlyGuardian {
+        Round storage r = _rounds[roundId];
+        if (r.startsAt == 0) revert RoundNotOpen(roundId);
+        if (r.finalized) revert AlreadyFinalized(roundId);
+        voided[roundId] = true;
+        emit RoundVoided(roundId);
     }
 
     /// @notice Sets the closed list of eligible Hyperliquid asset indices for FUTURE rounds (running rounds keep
@@ -257,12 +324,16 @@ contract WarchestGovernance is IWarchestDecisionSource {
 
     /// @notice Publishes the voting-weight merkle root of a daily snapshot `epoch`.
     /// @dev Leaves are `keccak256(bytes.concat(keccak256(abi.encode(epoch, account, weight))))` (OpenZeppelin
-    ///      double-hash standard, sorted-pair tree). `epoch` must be strictly greater than every previous submission,
-    ///      except that a revoked latest epoch may be resubmitted (e.g. after an indexer fix).
+    ///      double-hash standard, sorted-pair tree). `epoch` is a UTC day index, strictly greater than `latestEpoch`
+    ///      and at most tomorrow's index. Revoking the latest epoch rolls `latestEpoch` back, so it can be resubmitted.
     function submitWeightRoot(uint64 epoch, bytes32 root, uint256 totalWeight, bytes32 treeHash) external onlyUpdater {
         if (root == bytes32(0)) revert EmptyRoot();
-        bool resubmission = epoch == latestEpoch && _roots[epoch].revoked;
-        if (epoch <= latestEpoch && !resubmission) revert EpochNotIncreasing(epoch, latestEpoch);
+        if (totalWeight == 0 || totalWeight > MAX_TOTAL_WEIGHT) revert InvalidTotalWeight();
+        if (epoch <= latestEpoch) revert EpochNotIncreasing(epoch, latestEpoch);
+        // epochs are UTC day indices: a far-future epoch would block every later submission
+        if (epoch > block.timestamp / 1 days + 1) revert EpochInFuture(epoch);
+
+        prevEpoch[epoch] = latestEpoch;
 
         _roots[epoch] = WeightRoot({
             root: root,
@@ -282,6 +353,7 @@ contract WarchestGovernance is IWarchestDecisionSource {
             revert RootNotRevocable(epoch);
         }
         r.revoked = true;
+        if (epoch == latestEpoch) latestEpoch = prevEpoch[epoch];
         emit WeightRootRevoked(epoch, r.root);
     }
 
@@ -342,7 +414,8 @@ contract WarchestGovernance is IWarchestDecisionSource {
     }
 
     /// @notice Closes the tally of an ended round. Permissionless.
-    /// @dev Direction round: a NEW decision is minted only if quorum is reached and the top option is unique;
+    /// @dev A round is valid only if it was not voided and is finalized within `votingPeriod` after `endsAt`.
+    ///      Direction round: a NEW decision is minted only if valid, quorum is reached and the top option is unique;
     ///      otherwise the previous decision stands unchanged (same id) — DECISIONS.md D8.
     ///      Close round: the close is requested only if quorum is reached and "close" strictly beats "keep".
     function finalize(uint256 roundId) external whenNotPaused {
@@ -354,12 +427,15 @@ contract WarchestGovernance is IWarchestDecisionSource {
         r.finalized = true;
         activeRound[r.kind] = 0;
 
-        bool quorate = r.totalVoted * BPS >= uint256(quorumBps) * _roots[r.epoch].totalWeight;
+        uint256 totalWeight = _roots[r.epoch].totalWeight;
+        bool quorate = r.totalVoted * BPS >= uint256(quorumBps) * totalWeight;
+        // voided (pause overlap / guardian cancel) or finalized too late (stale outcome): fallback only
+        bool valid = !voided[roundId] && block.timestamp <= uint256(r.endsAt) + votingPeriod;
         (uint256 winner, uint256 winnerWeight, bool unique) = _leader(roundId);
-        emit RoundFinalized(roundId, quorate, winner, winnerWeight);
+        emit RoundFinalized(roundId, quorate, valid, winner, winnerWeight, r.totalVoted, totalWeight);
 
         if (r.kind == RoundKind.Direction) {
-            if (quorate && unique && winnerWeight > 0) {
+            if (valid && quorate && unique && winnerWeight > 0) {
                 (uint32 asset, Side side) = decodeOption(roundId, winner);
                 uint256 id = _currentDecision.id + 1;
                 _currentDecision =
@@ -368,7 +444,7 @@ contract WarchestGovernance is IWarchestDecisionSource {
             } else {
                 emit FallbackToPreviousDecision(roundId, _currentDecision.id);
             }
-        } else if (quorate && unique && winner == 1) {
+        } else if (valid && quorate && unique && winner == 1) {
             _closeRequested[r.targetDecisionId] = true;
             emit CloseRequested(r.targetDecisionId, roundId);
         }
@@ -420,9 +496,10 @@ contract WarchestGovernance is IWarchestDecisionSource {
         uint256 active = activeRound[kind];
         if (active != 0) revert RoundAlreadyActive(active);
         if (!isRootUsable(epoch)) revert RootNotUsable(epoch);
-        if (block.timestamp > uint256(_roots[epoch].submittedAt) + challengeWindow + maxRootAge) {
-            revert RootTooOld(epoch);
-        }
+        if (_isStale(epoch)) revert RootTooOld(epoch);
+        // no cherry-picking among several usable snapshots: always the newest one
+        uint64 newest = latestUsableEpoch();
+        if (epoch != newest) revert NotLatestSnapshot(epoch, newest);
         if (epoch < lastRoundEpoch) revert SnapshotGoesBackwards(epoch, lastRoundEpoch);
 
         roundId = ++roundCount;
@@ -441,8 +518,28 @@ contract WarchestGovernance is IWarchestDecisionSource {
         emit RoundStarted(roundId, kind, epoch, endsAt, targetDecisionId);
     }
 
-    /// @notice Merkle leaf for (`epoch`, `account`, `weight`), exposed for off-chain tooling and tests.
-    function leaf(uint64 epoch, address account, uint256 weight) public pure returns (bytes32) {
-        return keccak256(bytes.concat(keccak256(abi.encode(epoch, account, weight))));
+    /// @notice Newest snapshot that can open a round: usable (not pending, not revoked) and not stale. 0 if none.
+    function latestUsableEpoch() public view returns (uint64 epoch) {
+        epoch = latestEpoch;
+        while (epoch != 0 && !isRootUsable(epoch)) {
+            epoch = prevEpoch[epoch];
+        }
+        if (epoch != 0 && _isStale(epoch)) return 0;
+    }
+
+    /// @notice Merkle leaf for (`epoch`, `account`, `weight`), domain-separated by chain and contract.
+    function leaf(uint64 epoch, address account, uint256 weight) public view returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(block.chainid, address(this), epoch, account, weight))));
+    }
+
+    function _isStale(uint64 epoch) internal view returns (bool) {
+        return block.timestamp > uint256(_roots[epoch].submittedAt) + challengeWindow + maxRootAge;
+    }
+
+    function _voidIfRunning(uint256 roundId) internal {
+        if (roundId != 0 && !voided[roundId] && block.timestamp < _rounds[roundId].endsAt) {
+            voided[roundId] = true;
+            emit RoundVoided(roundId);
+        }
     }
 }

@@ -1,88 +1,88 @@
-# Déploiement — token + hook + pool (S1.4)
+# Deployment — token + hook + pool (S1.4)
 
-Uniswap v4 est déployé **aux mêmes adresses** sur le testnet (46630) et le mainnet (4663). Un seul script couvre les deux.
+Uniswap v4 is deployed **at the same addresses** on testnet (46630) and mainnet (4663). A single script covers both.
 
-## Prérequis
-- Une clé déployeur avec de l'ETH testnet. Il en faut environ 0,05 ETH pour le gas, plus `LP_ETH_AMOUNT`.
-  - Le déployeur reçoit toute la supply, initialise le pool et possède la position LP.
-- `WARCHEST_VAULT` : destinataire des fees, **immutable dans le hook**.
-  - Sur testnet, on peut mettre une adresse temporaire, en attendant le vault de S3.
-  - Sur mainnet, le vault doit être déployé **avant** le hook, et doit accepter l'ETH natif de n'importe qui.
+## Prerequisites
+- A deployer key with testnet ETH. You need about 0.05 ETH for gas, plus `LP_ETH_AMOUNT`.
+  - The deployer receives the entire supply, initializes the pool and owns the LP position.
+- `WARCHEST_VAULT`: fee recipient, **immutable in the hook**.
+  - On testnet, a temporary address can be used until the S3 vault is available.
+  - On mainnet, the vault must be deployed **before** the hook, and must accept native ETH from anyone.
 
-## Commande
+## Command
 ```bash
 cd contracts
-export WARCHEST_VAULT=0x...        # obligatoire
-export LP_TOKEN_AMOUNT=...         # en wei, par défaut toute la supply
-export LP_ETH_AMOUNT=...           # en wei, par défaut 1 ETH
+export WARCHEST_VAULT=0x...        # required
+export LP_TOKEN_AMOUNT=...         # in wei, defaults to the entire supply
+export LP_ETH_AMOUNT=...           # in wei, defaults to 1 ETH
 forge script script/DeployWarchest.s.sol \
   --rpc-url robinhood_testnet --account <keystore> --broadcast \
   --verify --verifier blockscout --verifier-url https://explorer.testnet.chain.robinhood.com/api/
 ```
 
-Le script déroule, dans l'ordre :
-1. Déploie `WarchestToken`.
-2. Mine le salt du hook (flags `0x20CC`) et le déploie via CREATE2 (`0x4e59…956C`).
-3. Appelle `PoolManager.initialize` **directement**, au prix `LP_TOKEN_AMOUNT / LP_ETH_AMOUNT`.
-4. Crée la position LP full-range via le PositionManager officiel (Permit2).
+The script runs, in order:
+1. Deploys `WarchestToken`.
+2. Mines the hook salt (flags `0x20CC`) and deploys it via CREATE2 (`0x4e59…956C`).
+3. Calls `PoolManager.initialize` **directly**, at the price `LP_TOKEN_AMOUNT / LP_ETH_AMOUNT`.
+4. Creates the full-range LP position via the official PositionManager (Permit2).
 
-## Vérifié
-- `test/fork/DeployWarchestFork.t.sol` rejoue tout le lancement sur un fork du testnet et un fork du mainnet. Il fait ensuite un achat de 1 ETH, puis `flush()`, et vérifie que le vault reçoit 0,1 ETH − 1 wei.
-- `forge script … --broadcast` a aussi été exécuté contre un anvil forké du testnet, sans erreur.
+## Verified
+- `test/fork/DeployWarchestFork.t.sol` replays the whole launch on a testnet fork and a mainnet fork. It then makes a 1 ETH buy, then `flush()`, and checks that the vault receives 0.1 ETH − 1 wei.
+- `forge script … --broadcast` was also run against an anvil fork of the testnet, without errors.
 
-## Pièges
-- Ne **jamais** initialiser le pool via la multicall du PositionManager : le hook exige `sender == initializer`.
-- Le pool est protégé contre un front-run de l'initialisation, puisque seul `initializer` peut l'appeler. En revanche le **prix initial** reste celui choisi par le déployeur, donc à vérifier deux fois.
-- Hook allowlist : voir `HOOKLIST.md`. Sans validation, l'app et l'API Uniswap ne routent pas le pool.
+## Pitfalls
+- **Never** initialize the pool via the PositionManager's multicall: the hook requires `sender == initializer`.
+- The pool is protected against a front-run of the initialization, since only `initializer` can call it. However, the **initial price** is the one chosen by the deployer, so double-check it.
+- Hook allowlist: see `HOOKLIST.md`. Without validation, the Uniswap app and API do not route the pool.
 
 ---
 
-# Déploiement du système complet (S3.5)
+# Full system deployment (S3.5)
 
-`script/DeploySystem.s.sol` déploie et relie tout, dans le seul ordre valide :
-1. Gouvernance.
-2. Distributor, si activé.
+`script/DeploySystem.s.sol` deploys and wires everything, in the only valid order:
+1. Governance.
+2. Distributor, if enabled.
 3. Vault.
-4. `governance.setVault`, puis `setEligibleAssets` (BTC, ETH, SOL), puis `distributor.setVault`.
-5. Token, hook (dont le destinataire des fees est le vault qui vient d'être déployé), pool et liquidité.
-6. Lancement du **transfert du rôle guardian** vers le multisig.
+4. `governance.setVault`, then `setEligibleAssets` (BTC, ETH, SOL), then `distributor.setVault`.
+5. Token, hook (whose fee recipient is the freshly deployed vault), pool and liquidity.
+6. Initiation of the **guardian role transfer** to the multisig.
 
 ```bash
 export GUARDIAN=0x...   # multisig
 export UPDATER=0x...    # indexer
 export KEEPER=0x...     # bot
-export HL_ACCOUNT=0x... # compte Hyperliquid (multisig natif HL, D4) — IMMUTABLE dans le vault
-export ENABLE_DISTRIBUTOR=false   # D7 : à trancher après l'avis juridique
+export HL_ACCOUNT=0x... # Hyperliquid account (HL native multisig, D4) — IMMUTABLE in the vault
+export ENABLE_DISTRIBUTOR=false   # D7: to be decided after the legal opinion
 forge script script/DeploySystem.s.sol --rpc-url robinhood --account <keystore> --broadcast --verify
 ```
 
-Une fois le script terminé, le multisig doit appeler `acceptGuardian()` sur la gouvernance, le vault et le distributor.
+Once the script has finished, the multisig must call `acceptGuardian()` on the governance, the vault and the distributor.
 
-Garde-fous du script (revue de sécurité) :
-- Les valeurs par défaut (pool v3, WETH, USDG, SpokePool, USDC HyperEVM) n'existent que sur le mainnet **4663** : le script
-  revert avec `WrongChain` sur toute autre chaîne (un vault câblé sur ces adresses ailleurs serait inutilisable, et
-  ses immutables ne se corrigent pas). Les tests fork tournent sur un fork du mainnet, donc passent.
-- **Fenêtre « déployeur = guardian temporaire »** : entre le déploiement et l'`acceptGuardian()` du multisig sur les
-  trois contrats, la clé de déploiement détient tous les pouvoirs du guardian (pause, `setKeeper`, `revokeReport` /
-  `revokeCloseReport`, `proposeUpdater` — différé de 72 h côté gouvernance et de `timelock + 3 j` côté distributor —,
-  `cancelRound`, `setEligibleAssets`, annulation de son propre transfert par un nouveau `transferGuardian`) mais ne
-  peut **jamais** déplacer de fonds. Consignes : clé de déploiement fraîche, mise hors ligne dès la fin du script ;
-  acceptation par le multisig **avant** d'annoncer le pool et avant tout flux de trésorerie ; vérifier
-  `guardian() == multisig` sur les trois contrats avant la première conversion.
+Script safeguards (security review):
+- The default values (v3 pool, WETH, USDG, SpokePool, HyperEVM USDC) exist only on mainnet **4663**: the script
+  reverts with `WrongChain` on any other chain (a vault wired to these addresses elsewhere would be unusable, and
+  its immutables cannot be fixed). Fork tests run on a mainnet fork, so they pass.
+- **"Deployer = temporary guardian" window**: between deployment and the multisig's `acceptGuardian()` on the
+  three contracts, the deployment key holds all the guardian's powers (pause, `setKeeper`, `revokeReport` /
+  `revokeCloseReport`, `proposeUpdater` — delayed by 72 h on the governance side and by `timelock + 3 d` on the distributor side —,
+  `cancelRound`, `setEligibleAssets`, cancelling its own transfer via a new `transferGuardian`) but can
+  **never** move funds. Instructions: fresh deployment key, taken offline as soon as the script finishes;
+  acceptance by the multisig **before** announcing the pool and before any treasury flow; check
+  `guardian() == multisig` on all three contracts before the first conversion.
 
-**Vérifié** par `test/fork/SystemCycleFork.t.sol`, sur un fork du mainnet 4663 avec le vrai PoolManager v4, le vrai pool v3 WETH/USDG et le vrai SpokePool Across. Le test déroule :
-1. déploiement et branchement ;
-2. achat de 20 ETH, qui envoie 2 ETH de fee au vault ;
-3. conversion en ≈ 5 394 USDG au prix TWAP ;
-4. snapshot, vote, quorum, décision 1 ;
-5. ordre ≤ 20 % de la NAV, avec un vrai dépôt Across ;
-6. round sans quorum : on garde le même id, et rien n'est exécuté (D8) ;
-7. nouvelle décision : `mustClose` passe à vrai ;
-8. clôture, retour des fonds à +25 %, PnL comptabilisé ;
-9. financement du distributor, puis claim.
+**Verified** by `test/fork/SystemCycleFork.t.sol`, on a fork of mainnet 4663 with the real v4 PoolManager, the real WETH/USDG v3 pool and the real Across SpokePool. The test runs through:
+1. deployment and wiring;
+2. a 20 ETH buy, which sends 2 ETH of fees to the vault;
+3. conversion into ≈ 5,394 USDG at the TWAP price;
+4. snapshot, vote, quorum, decision 1;
+5. order ≤ 20% of NAV, with a real Across deposit;
+6. round without quorum: the same id is kept, and nothing is executed (D8);
+7. new decision: `mustClose` becomes true;
+8. close, return of funds at +25%, PnL accounted for;
+9. distributor funding, then claim.
 
-Seules la jambe Hyperliquid et le fill retour du bridge sont simulés. Ils seront couverts en S5.
+Only the Hyperliquid leg and the bridge return fill are simulated. They will be covered in S5.
 
-Réseau de test :
-- Le PoolManager et le SpokePool ne posent pas de problème : v4 est présent sur 46630 et `MockAcrossSpokePool` remplace le SpokePool (D6).
-- En revanche, il n'y a pas de pool v3 WETH/USDG sur le testnet. L'E2E testnet (S5.5) devra donc déployer un pool WETH/USDG mock avec son oracle.
+Test network:
+- The PoolManager and the SpokePool are not a problem: v4 is present on 46630 and `MockAcrossSpokePool` replaces the SpokePool (D6).
+- However, there is no WETH/USDG v3 pool on the testnet. The testnet E2E (S5.5) will therefore have to deploy a mock WETH/USDG pool with its oracle.

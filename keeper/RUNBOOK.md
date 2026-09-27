@@ -1,132 +1,132 @@
-# WARCHEST keeper — runbook incident
+# WARCHEST keeper — incident runbook
 
-> Périmètre : le bot `keeper/`, le compte Hyperliquid (multisig D4 + sub-account + agent), le bridge Across et les
-> appels au `WarchestVault`. Les contrats sont gelés ; rien ici ne modifie un paramètre on-chain.
+> Scope: the `keeper/` bot, the Hyperliquid account (D4 multisig + sub-account + agent), the Across bridge and
+> calls to `WarchestVault`. The contracts are frozen; nothing here changes an on-chain parameter.
 
-## 0. Ce que chaque clé peut et ne peut pas faire
+## 0. What each key can and cannot do
 
-| Clé | Détenue par | Peut | Ne peut jamais |
+| Key | Held by | Can | Can never |
 |---|---|---|---|
-| Agent Hyperliquid (`HL_AGENT_PRIVATE_KEY`) | keeper | `order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`, `updateLeverage`, `updateIsolatedMargin`, `scheduleCancel` (allowlist dans `signer.ts`) | retirer, transférer (`withdraw3`, `usdSend`, `spotSend`, `sendAsset`, `usdClassTransfer`, `vaultTransfer`, `subAccountTransfer`), approuver un agent ou un builder |
-| Keeper Robinhood (`KEEPER_PRIVATE_KEY`) | keeper | `convertEthToUsdg` (≥ plancher TWAP), `executeDecision` (≤ 20 % NAV, une fois par décision, destinataire immuable), `reportPosition`, `reportClosed`, `reconcile` | envoyer des fonds ailleurs, déclarer un montant revenu, rejouer une décision |
-| Multisig HL (D4) | signataires | tout sur le compte HL, dont le retour des fonds | — |
-| Guardian (D9) | multisig | `setPaused`, `setKeeper`, révoquer un rapport | déplacer des fonds |
+| Hyperliquid agent (`HL_AGENT_PRIVATE_KEY`) | keeper | `order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`, `updateLeverage`, `updateIsolatedMargin`, `scheduleCancel` (allowlist in `signer.ts`) | withdraw, transfer (`withdraw3`, `usdSend`, `spotSend`, `sendAsset`, `usdClassTransfer`, `vaultTransfer`, `subAccountTransfer`), approve an agent or a builder |
+| Robinhood keeper (`KEEPER_PRIVATE_KEY`) | keeper | `convertEthToUsdg` (≥ TWAP floor), `executeDecision` (≤ 20% NAV, once per decision, immutable recipient), `reportPosition`, `reportClosed`, `reconcile` | send funds elsewhere, declare a returned amount, replay a decision |
+| HL multisig (D4) | signers | everything on the HL account, including returning the funds | — |
+| Guardian (D9) | multisig | `setPaused`, `setKeeper`, revoke a report | move funds |
 
-Conséquence : **une compromission du keeper ne peut pas sortir de fonds** ; elle peut au pire mal trader sur
-Hyperliquid (RESEARCH §2.3) ou exécuter une décision au mauvais moment. La réponse à toute compromission est la
-même : pause + kill switch + rotation des deux clés.
+Consequence: **a keeper compromise cannot move funds out**; at worst it can trade badly on
+Hyperliquid (RESEARCH §2.3) or execute a decision at the wrong time. The response to any compromise is the
+same: pause + kill switch + rotate both keys.
 
-## 1. Commandes
+## 1. Commands
 
 ```bash
-npm run keeper once            # un tick, en dry-run par défaut (MODE=dry-run)
-npm run keeper run             # boucle
-npm run keeper status          # runs SQLite + 20 derniers événements
-npm run keeper monitor once    # moniteur indépendant ; code 2 = constat rouge
-npm run keeper kill "raison"   # MODE=live : cancel all + clôture reduce-only de tout le compte
-npm run smoke                  # lecture seule live (RPC, HL /info, Across)
-npx tsx scripts/sigproof.ts    # preuve de signature testnet (clé jetable)
+npm run keeper once            # one tick, dry-run by default (MODE=dry-run)
+npm run keeper run             # loop
+npm run keeper status          # SQLite runs + last 20 events
+npm run keeper monitor once    # independent monitor; exit code 2 = red finding
+npm run keeper kill "reason"   # MODE=live: cancel all + reduce-only close of the whole account
+npm run smoke                  # live read-only (RPC, HL /info, Across)
+npx tsx scripts/sigproof.ts    # testnet signature proof (throwaway key)
 ```
 
-Le moniteur doit tourner **dans un processus séparé** (`MONITOR_KILL=1` pour qu'il puisse déclencher le kill
-switch lui-même) et idéalement sur une machine séparée : il n'a besoin que de la clé d'agent (kill) ou d'aucune clé
-(alerte seule).
+Run the monitor **in a separate process** (`MONITOR_KILL=1` so it can trigger the kill
+switch itself), ideally on a separate machine: it needs only the agent key (kill) or no key at all
+(alert only).
 
-## 2. Alertes et réponse attendue
+## 2. Alerts and expected response
 
-| Alerte | Gravité | Réponse |
+| Alert | Severity | Response |
 |---|---|---|
-| `keeper key is not the vault keeper` | critique | Le guardian a tourné le keeper ou la config est fausse. Rien ne sera exécuté. Vérifier `vault.keeper()`. |
-| `agent not approved on the Hyperliquid account` | critique | Le multisig doit `approveAgent` avec **une nouvelle adresse** (jamais réutiliser une adresse d'agent, RESEARCH §2.1). Mettre à jour `HL_AGENT_PRIVATE_KEY`. |
-| `agent expires soon` | warning | Idem, avant `validUntil` (≤ 30 j, D4). Une position ouverte reste protégée par son stop on-chain HL pendant la rotation. |
-| `funds on HyperEVM: multisig action required` | warning | Étape 3 de D5 : la clé EVM du multisig envoie l'USDC à `0x2000…0000` (HyperCore), puis `usdClassTransfer` spot → perp, puis `subAccountTransfer` vers le compte de trading. Le keeper attend `withdrawable ≥ 99 %` de `outputAmount`. |
-| `openPosition refused` / `executeDecision refused` | critique / warning | Lire la raison (`allowlist`, `delisted`, `max leverage`, `stop-loss beyond safe distance`…). C'est un fail-closed volontaire : ne pas contourner ; si la décision est légitime, corriger la config ou attendre une nouvelle décision. |
-| `stop-loss could not be verified, flattening` | critique | Le keeper a déjà aplati. Vérifier sur HL qu'il n'y a plus de position ; sinon `keeper kill`. Ne pas rouvrir à la main : le keeper retentera à la prochaine tick (tentatives bornées). |
-| `stop-loss missing while holding: re-protecting` | critique | Quelqu'un a annulé le stop (ou `scheduleCancel` est resté armé). Le keeper repose le stop ; si ça échoue, il aplatit. Chercher la cause (autre agent ? action manuelle du multisig ?). |
-| `position margin mode / leverage differs` | critique | Aplati automatiquement. Vérifier qu'aucun autre agent ne change le levier. |
-| `monitor <CODE>` | rouge / jaune | Voir §3. |
-| `position closed on Hyperliquid (stop, take-profit or liquidation)` | warning | Normal. Le keeper passe en `closed_on_hl` puis émet le plan de retour. |
-| `RETURN REQUIRED: multisig must bring the funds back` | critique | Exécuter le plan (§4). |
-| `funds not back after the return timeout` | critique | Relancer les signataires. Le vault reste bloqué (aucune nouvelle décision) tant que `reportClosed` + `finalizeClose` ne sont pas passés. |
-| `Across deposit expired` / `refunded` | warning | Le SpokePool rembourse le vault (depositor). Le keeper clôt la décision sans trader : `reportClosed` puis `finalizeClose` avec `returned ≈ capital`. |
-| `KILL SWITCH` / `kill switch: positions remain` | critique | Si des positions restent : relancer `keeper kill`, sinon fermer à la main depuis le multisig (clé maître). |
-| `entry attempts exhausted` | critique | 5 IOC sans fill (liquidité / prix hors borne). Décision humaine : attendre, élargir `ENTRY_SLIPPAGE_BPS`, ou laisser expirer. |
+| `keeper key is not the vault keeper` | critical | The guardian rotated the keeper or the config is wrong. Nothing will be executed. Check `vault.keeper()`. |
+| `agent not approved on the Hyperliquid account` | critical | The multisig must `approveAgent` with **a new address** (never reuse an agent address, RESEARCH §2.1). Update `HL_AGENT_PRIVATE_KEY`. |
+| `agent expires soon` | warning | Same, before `validUntil` (≤ 30 d, D4). An open position stays protected by its HL on-chain stop during the rotation. |
+| `funds on HyperEVM: multisig action required` | warning | D5 step 3: the multisig's EVM key sends the USDC to `0x2000…0000` (HyperCore), then `usdClassTransfer` spot → perp, then `subAccountTransfer` to the trading account. The keeper waits for `withdrawable ≥ 99%` of `outputAmount`. |
+| `openPosition refused` / `executeDecision refused` | critical / warning | Read the reason (`allowlist`, `delisted`, `max leverage`, `stop-loss beyond safe distance`…). This is a deliberate fail-closed: do not bypass it; if the decision is legitimate, fix the config or wait for a new decision. |
+| `stop-loss could not be verified, flattening` | critical | The keeper has already flattened. Check on HL that no position remains; otherwise `keeper kill`. Do not reopen manually: the keeper will retry on the next tick (bounded attempts). |
+| `stop-loss missing while holding: re-protecting` | critical | Someone cancelled the stop (or `scheduleCancel` stayed armed). The keeper re-places the stop; if that fails, it flattens. Find the cause (another agent? manual multisig action?). |
+| `position margin mode / leverage differs` | critical | Flattened automatically. Check that no other agent is changing the leverage. |
+| `monitor <CODE>` | red / yellow | See §3. |
+| `position closed on Hyperliquid (stop, take-profit or liquidation)` | warning | Normal. The keeper moves to `closed_on_hl` and then emits the return plan. |
+| `RETURN REQUIRED: multisig must bring the funds back` | critical | Execute the plan (§4). |
+| `funds not back after the return timeout` | critical | Chase the signers. The vault stays blocked (no new decision) until `reportClosed` + `finalizeClose` have gone through. |
+| `Across deposit expired` / `refunded` | warning | The SpokePool refunds the vault (depositor). The keeper closes the decision without trading: `reportClosed` then `finalizeClose` with `returned ≈ capital`. |
+| `KILL SWITCH` / `kill switch: positions remain` | critical | If positions remain: rerun `keeper kill`, otherwise close manually from the multisig (master key). |
+| `entry attempts exhausted` | critical | 5 IOCs without a fill (liquidity / price out of bounds). Human decision: wait, widen `ENTRY_SLIPPAGE_BPS`, or let it expire. |
 
-## 3. Codes du moniteur
+## 3. Monitor codes
 
-| Code | Sens | Action |
+| Code | Meaning | Action |
 |---|---|---|
-| `POSITION_WITHOUT_VAULT` | position HL alors que le vault n'a pas de position | Kill switch. Quelqu'un trade avec le compte. Rotation de l'agent. |
-| `FOREIGN_POSITION` / `ASSET_NOT_ALLOWED` | coin ≠ décision | Kill switch. |
-| `SIDE_MISMATCH`, `MARGIN_MODE`, `LEVERAGE`, `SIZE_EXCEEDS` | position non conforme à `riskParams` | Kill switch (le keeper l'aurait déjà aplatie ; vérifier qu'il tourne). |
-| `STOP_MISSING`, `STOP_TOO_FAR` | protection absente ou trop lâche | Le keeper repose le stop. Si le code persiste plus d'un intervalle : kill switch. |
-| `UNEXPECTED_ORDER` | ordre non reduce-only ou sur un autre coin | Rouge si non reduce-only : kill switch. Jaune sinon : investiguer. |
-| `AGENT_MISSING` / `AGENT_EXPIRING` | agent | Rotation (§2). |
-| `MUST_CLOSE` | le vault demande la clôture | Vérifier que le keeper est en `closing` ; sinon `keeper kill`. |
+| `POSITION_WITHOUT_VAULT` | HL position while the vault has no position | Kill switch. Someone is trading with the account. Rotate the agent. |
+| `FOREIGN_POSITION` / `ASSET_NOT_ALLOWED` | coin ≠ decision | Kill switch. |
+| `SIDE_MISMATCH`, `MARGIN_MODE`, `LEVERAGE`, `SIZE_EXCEEDS` | position not compliant with `riskParams` | Kill switch (the keeper should already have flattened it; check that it is running). |
+| `STOP_MISSING`, `STOP_TOO_FAR` | protection missing or too loose | The keeper re-places the stop. If the code persists for more than one interval: kill switch. |
+| `UNEXPECTED_ORDER` | non-reduce-only order or order on another coin | Red if non-reduce-only: kill switch. Yellow otherwise: investigate. |
+| `AGENT_MISSING` / `AGENT_EXPIRING` | agent | Rotate (§2). |
+| `MUST_CLOSE` | the vault requests the close | Check that the keeper is in `closing`; otherwise `keeper kill`. |
 
-## 4. Retour des fonds (signé par le multisig, jamais par le keeper)
+## 4. Return of funds (signed by the multisig, never by the keeper)
 
-Le keeper émet un `RETURN PLAN` (alerte + log) avec les montants exacts. Ordre des étapes :
-1. `subAccountTransfer` du sub-account vers le maître (si sub-account).
-2. `usdClassTransfer` perp → spot sur le maître.
-3. `spotSend` USDC vers l'adresse système `0x2000000000000000000000000000000000000000` (HyperCore → HyperEVM).
-4. Sur HyperEVM (999), un dépôt Across par morceau (`/limits`, ≈ 246 k$ instantané) : `inputToken` USDC
-   `0xb883…630f`, `outputToken` USDG `0x5fc5…d168`, `destinationChainId` 4663, **`recipient` = le vault**,
-   `outputAmount` ≥ quote fraîche (`/suggested-fees`, re-quoter au moment de signer : `quoteTimestamp` ≤ 1 h,
+The keeper emits a `RETURN PLAN` (alert + log) with the exact amounts. Order of steps:
+1. `subAccountTransfer` from the sub-account to the master (if sub-account).
+2. `usdClassTransfer` perp → spot on the master.
+3. `spotSend` USDC to the system address `0x2000000000000000000000000000000000000000` (HyperCore → HyperEVM).
+4. On HyperEVM (999), one Across deposit per chunk (`/limits`, ≈ $246k instant): `inputToken` USDC
+   `0xb883…630f`, `outputToken` USDG `0x5fc5…d168`, `destinationChainId` 4663, **`recipient` = the vault**,
+   `outputAmount` ≥ fresh quote (`/suggested-fees`, re-quote at signing time: `quoteTimestamp` ≤ 1 h,
    `fillDeadline` ≤ 6 h).
-5. Le keeper voit `balance − usdgLedger ≥ RETURN_TOLERANCE_BPS × attendu` et envoie `reportClosed` ; 6 h plus
-   tard n'importe qui peut `finalizeClose`. Les morceaux qui arrivent après sont comptés par `reconcile`.
+5. The keeper sees `balance − usdgLedger ≥ RETURN_TOLERANCE_BPS × expected` and sends `reportClosed`; 6 h
+   later anyone can `finalizeClose`. Chunks arriving afterwards are accounted for by `reconcile`.
 
-Alternative : `withdraw3` vers Arbitrum (~3–5 min, 1 $) puis Across `42161 USDC → 4663 USDG` vers le vault.
+Alternative: `withdraw3` to Arbitrum (~3–5 min, $1) then Across `42161 USDC → 4663 USDG` to the vault.
 
-Si une partie du capital est **définitivement perdue** (liquidation) : le retour est partiel ; utiliser
-`FORCE_REPORT_CLOSED_ID=<id>` pour que le keeper envoie `reportClosed` sous le seuil. Le guardian dispose de 6 h
-pour révoquer. Ne jamais forcer tant que des fonds restent sur Hyperliquid.
+If part of the capital is **permanently lost** (liquidation): the return is partial; use
+`FORCE_REPORT_CLOSED_ID=<id>` so the keeper sends `reportClosed` below the threshold. The guardian has 6 h
+to revoke. Never force while funds remain on Hyperliquid.
 
-## 5. Procédures
+## 5. Procedures
 
-### 5.1 Pause (guardian) ⇒ débouclage
-`vault.setPaused(true)` ⇒ `mustClose()` vrai ⇒ à la tick suivante le keeper annule les ordres, ferme en reduce-only,
-émet le plan de retour. `reportClosed` et `finalizeClose` restent autorisés en pause. La position n'est **pas**
-rouverte au dépausage (D8 : il faut une nouvelle décision quorate).
+### 5.1 Pause (guardian) ⇒ unwind
+`vault.setPaused(true)` ⇒ `mustClose()` true ⇒ on the next tick the keeper cancels orders, closes reduce-only,
+emits the return plan. `reportClosed` and `finalizeClose` remain allowed while paused. The position is **not**
+reopened on unpause (D8: a new quorate decision is required).
 
-### 5.2 Clé d'agent compromise
-1. `keeper kill` (ou laisser le moniteur le faire) ; 2. le multisig révoque l'agent (`approveAgent` d'une nouvelle
-adresse, l'ancienne n'est plus utilisable après expiration ; pour un effet immédiat, déplacer les fonds hors du
-sub-account : `subAccountTransfer` vers le maître) ; 3. nouvelle `HL_AGENT_PRIVATE_KEY` ; 4. redémarrer.
+### 5.2 Compromised agent key
+1. `keeper kill` (or let the monitor do it); 2. the multisig revokes the agent (`approveAgent` with a new
+address; the old one is unusable after expiry; for immediate effect, move the funds out of the
+sub-account: `subAccountTransfer` to the master); 3. new `HL_AGENT_PRIVATE_KEY`; 4. restart.
 
-### 5.3 Clé keeper Robinhood compromise
-1. Guardian : `setPaused(true)` puis `setKeeper(nouvelle adresse)` ; 2. pertes maximales bornées par le vault
-(`VAULT.md` §4–5) ; 3. redémarrer avec la nouvelle clé, dépauser.
+### 5.3 Compromised Robinhood keeper key
+1. Guardian: `setPaused(true)` then `setKeeper(new address)`; 2. maximum losses are bounded by the vault
+(`VAULT.md` §4–5); 3. restart with the new key, unpause.
 
-### 5.4 Keeper arrêté / base SQLite perdue
-Redémarrer. Une position ouverte sans historique local est **adoptée** depuis l'état on-chain + HL (stage déduit :
-`protecting` si position, `opening` si USDC disponible, `funding` si dépôt rempli, sinon `bridging`) ; la
-protection est re-vérifiée avant de passer en `holding`. Les `cloid` déterministes empêchent tout double envoi.
+### 5.4 Keeper stopped / SQLite database lost
+Restart. An open position with no local history is **adopted** from on-chain + HL state (inferred stage:
+`protecting` if position, `opening` if USDC available, `funding` if deposit filled, otherwise `bridging`); the
+protection is re-verified before moving to `holding`. Deterministic `cloid`s prevent any double send.
 
-### 5.5 Hyperliquid indisponible
-Le stop-loss est un trigger **on-chain HL** : il reste actif sans le keeper. Le keeper retente avec backoff
-(≤ 10 min). Ne rien faire tant que `/info` ne répond pas ; ne pas armer `scheduleCancel`.
+### 5.5 Hyperliquid unavailable
+The stop-loss is an **HL on-chain** trigger: it stays active without the keeper. The keeper retries with backoff
+(≤ 10 min). Do nothing until `/info` responds; do not arm `scheduleCancel`.
 
-### 5.6 Across ne remplit pas
-`fillDeadline` (≤ 6 h) passé ⇒ remboursement au vault dans un bundle ultérieur (peut prendre des heures). Le keeper
-attend et clôt sans trader. Ne pas relancer `executeDecision` : la décision est déjà consommée (`id ≤ last`).
+### 5.6 Across does not fill
+`fillDeadline` (≤ 6 h) passed ⇒ refund to the vault in a later bundle (can take hours). The keeper
+waits and closes without trading. Do not rerun `executeDecision`: the decision is already consumed (`id ≤ last`).
 
-### 5.7 Décision sur un actif hors allowlist / délisté
-Refus fail-closed, alerte. La décision expire (`maxDecisionAge`) ; la gouvernance doit revoter. Ne pas élargir
-`ALLOWED_ASSETS` sous pression.
+### 5.7 Decision on an asset outside the allowlist / delisted
+Fail-closed refusal, alert. The decision expires (`maxDecisionAge`); governance must vote again. Do not widen
+`ALLOWED_ASSETS` under pressure.
 
-### 5.8 Dead-man switch resté armé
-`scheduleCancel` annule **aussi le stop**. Symptôme : `STOP_MISSING` à intervalle régulier. Réponse : le keeper
-repose le stop ; désarmer avec `scheduleCancel` sans `time` (le keeper le fait à la prochaine entrée) et vérifier
+### 5.8 Dead-man switch left armed
+`scheduleCancel` cancels **the stop too**. Symptom: `STOP_MISSING` at regular intervals. Response: the keeper
+re-places the stop; disarm with `scheduleCancel` without `time` (the keeper does this on the next entry) and check
 `DEADMAN_MS`.
 
-## 6. Avant tout capital réel (bloquants humains)
-- [ ] S0.2 : preuves brutes de rejet `withdraw3` / `usdSend` / `vaultTransfer` / `subAccountTransfer` /
-      `approveAgent` par un agent sur le testnet HL, sur un compte **financé** (le faucet exige un dépôt mainnet).
-- [ ] Compte HL converti en multisig (`convertToMultiSigUser`), sub-account créé, agent approuvé ≤ 30 j.
-- [ ] S0.3 : petit transfert Across réel RH → HyperEVM → HyperCore et retour ; mesurer délais, frais, étapes.
-- [ ] `HL_ACCOUNT` = `vault.bridgeRecipient()` (immuable) ; `ALLOWED_ASSETS` = noms des `eligibleAssets` de la
-      gouvernance sur le réseau HL visé (les index diffèrent entre mainnet et testnet).
-- [ ] Moniteur sur une machine séparée avec `MONITOR_KILL=1`.
-- [ ] 48 h de `MODE=dry-run` sans erreur (critère S5.1 du plan).
+## 6. Before any real capital (human blockers)
+- [ ] S0.2: raw proofs of rejection of `withdraw3` / `usdSend` / `vaultTransfer` / `subAccountTransfer` /
+      `approveAgent` by an agent on the HL testnet, on a **funded** account (the faucet requires a mainnet deposit).
+- [ ] HL account converted to multisig (`convertToMultiSigUser`), sub-account created, agent approved ≤ 30 d.
+- [ ] S0.3: small real Across transfer RH → HyperEVM → HyperCore and back; measure delays, fees, steps.
+- [ ] `HL_ACCOUNT` = `vault.bridgeRecipient()` (immutable); `ALLOWED_ASSETS` = names of the governance's
+      `eligibleAssets` on the target HL network (indexes differ between mainnet and testnet).
+- [ ] Monitor on a separate machine with `MONITOR_KILL=1`.
+- [ ] 48 h of `MODE=dry-run` without errors (plan criterion S5.1).

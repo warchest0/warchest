@@ -1,144 +1,144 @@
 # WARCHEST — keeper
 
-Bot off-chain (Node ≥ 24, TypeScript, viem, `node:sqlite`) qui exécute les décisions de gouvernance sur Hyperliquid :
+Off-chain bot (Node ≥ 24, TypeScript, viem, `node:sqlite`) that executes governance decisions on Hyperliquid:
 
-1. lit `governance.currentDecision()` et l'état du vault (source de vérité, jamais inventé) ;
-2. convertit l'ETH du vault en USDG (`convertEthToUsdg`, borné par le plancher TWAP on-chain) ;
-3. bridge le capital via Across (`executeDecision`, paramètres pris sur `/suggested-fees` et `/limits`) ;
-4. ouvre la position sur Hyperliquid avec l'**agent trading-only** (marge isolée, levier du vault), pose le stop-loss
-   et le take-profit **après** le fill et les relit ;
-5. rapporte l'equity (`reportPosition`), ferme quand `mustClose()` est vrai, prépare les instructions de retour pour
-   le **multisig** (D4 : le keeper ne signe jamais un retrait), puis `reportClosed` / `finalizeClose` / `reconcile`.
+1. reads `governance.currentDecision()` and the vault state (source of truth, never invented);
+2. converts the vault's ETH into USDG (`convertEthToUsdg`, bounded by the on-chain TWAP floor);
+3. bridges the capital via Across (`executeDecision`, parameters taken from `/suggested-fees` and `/limits`);
+4. opens the position on Hyperliquid with the **trading-only agent** (isolated margin, vault leverage), places the stop-loss
+   and the take-profit **after** the fill and reads them back;
+5. reports equity (`reportPosition`), closes when `mustClose()` is true, prepares the return instructions for
+   the **multisig** (D4: the keeper never signs a withdrawal), then `reportClosed` / `finalizeClose` / `reconcile`.
 
 ```bash
 npm ci
-npm test            # unitaires + intégration anvil (contrats réels, sautée sans anvil/artefacts)
-npm run smoke       # lecture seule LIVE : RPC Robinhood mainnet, Hyperliquid /info, API Across
-npm run keeper once # un tick (dry-run par défaut)
-npm run keeper run  # boucle
+npm test            # unit + anvil integration (real contracts, skipped without anvil/artifacts)
+npm run smoke       # LIVE read-only: Robinhood mainnet RPC, Hyperliquid /info, Across API
+npm run keeper once # one tick (dry-run by default)
+npm run keeper run  # loop
 npm run keeper status
-npm run keeper monitor [once]   # moniteur indépendant (code 2 si un constat rouge)
-npm run keeper kill [raison]    # kill switch : cancel all + clôture reduce-only (MODE=live)
-npm run keeper return-plan [usdc] # plan de retour pour le multisig (lecture seule)
-npx tsx scripts/sigproof.ts     # preuve de signature contre le testnet HL (clé jetable, 5 requêtes)
+npm run keeper monitor [once]   # independent monitor (exit code 2 on a red finding)
+npm run keeper kill [reason]    # kill switch: cancel all + reduce-only close (MODE=live)
+npm run keeper return-plan [usdc] # return plan for the multisig (read-only)
+npx tsx scripts/sigproof.ts     # signature proof against the HL testnet (throwaway key, 5 requests)
 ```
 
 ## Modes
-- **`MODE=dry-run`** (défaut) : lit tout, calcule et logge chaque action prévue (`WOULD …`), ne signe rien.
-- **`MODE=live`** : signe les tx du vault avec `KEEPER_PRIVATE_KEY` (`src/chain/writer.ts`, chaque tx est
-  **simulée** avant envoi : rien n'est diffusé si le vault reverterait) et les actions L1 Hyperliquid avec
-  `HL_AGENT_PRIVATE_KEY`. Refusé sur Robinhood mainnet sans `ALLOW_MAINNET=1`.
+- **`MODE=dry-run`** (default): reads everything, computes and logs each planned action (`WOULD …`), signs nothing.
+- **`MODE=live`**: signs vault txs with `KEEPER_PRIVATE_KEY` (`src/chain/writer.ts`, every tx is
+  **simulated** before sending: nothing is broadcast if the vault would revert) and Hyperliquid L1 actions with
+  `HL_AGENT_PRIVATE_KEY`. Refused on Robinhood mainnet without `ALLOW_MAINNET=1`.
 
-Configuration : voir `.env.example`.
+Configuration: see `.env.example`.
 
-## Invariants de sécurité
-- **L'agent Hyperliquid ne peut jamais retirer.** Le keeper ne détient que la clé d'agent et ne construit que des
-  actions L1 (`order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`, `updateLeverage`, `updateIsolatedMargin`,
-  `scheduleCancel`). Tout autre type d'action est refusé **dans la couche de signature** (allowlist, S5.2) ; le
-  domaine EIP-712 `HyperliquidSignTransaction` (retraits, transferts, `approveAgent`…) n'existe pas dans le code.
-- **Le vault et la gouvernance sont la source de vérité** : actif et sens = `currentDecision()`, levier / stop /
-  take-profit = `vault.riskParams()` (immuables), capital = position enregistrée par le vault. Chaque borne du vault
-  (`_checkDecision`, `_checkOrder`, fenêtres du SpokePool) est re-vérifiée localement avant de construire une tx
+## Security invariants
+- **The Hyperliquid agent can never withdraw.** The keeper holds only the agent key and builds only
+  L1 actions (`order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`, `updateLeverage`, `updateIsolatedMargin`,
+  `scheduleCancel`). Any other action type is refused **in the signing layer** (allowlist, S5.2); the
+  EIP-712 domain `HyperliquidSignTransaction` (withdrawals, transfers, `approveAgent`…) does not exist in the code.
+- **The vault and governance are the source of truth**: asset and side = `currentDecision()`, leverage / stop /
+  take-profit = `vault.riskParams()` (immutable), capital = position recorded by the vault. Every vault bound
+  (`_checkDecision`, `_checkOrder`, SpokePool windows) is re-checked locally before building a tx
   (`src/planner.ts`).
-- **Liste fermée d'actifs** (`ALLOWED_ASSETS`, défaut `BTC,ETH,SOL`) : une décision hors liste, un actif délisté ou
-  un index inconnu sont refusés (fail-closed), et signalés.
-- **Fail-closed sur la protection** : si le stop-loss ne peut pas être relu dans `frontendOpenOrders`, la position
-  est aplatie.
-- **Retour des fonds** : `reportClosed` n'est envoyé qu'une fois ≥ `RETURN_TOLERANCE_BPS` de l'equity attendue
-  revenue sur le vault (`balance − usdgLedger`), ou avec l'override explicite `FORCE_REPORT_CLOSED_ID`.
+- **Closed asset list** (`ALLOWED_ASSETS`, default `BTC,ETH,SOL`): a decision outside the list, a delisted asset or
+  an unknown index is refused (fail-closed) and reported.
+- **Fail-closed on protection**: if the stop-loss cannot be read back in `frontendOpenOrders`, the position
+  is flattened.
+- **Return of funds**: `reportClosed` is only sent once ≥ `RETURN_TOLERANCE_BPS` of the expected equity
+  is back in the vault (`balance − usdgLedger`), or with the explicit override `FORCE_REPORT_CLOSED_ID`.
 
-## Signature Hyperliquid (S5.2) : signer maison, pas de SDK
-Le keeper n'utilise **pas** `@nktkas/hyperliquid` (4 dépendances transitives, WebSocket, et surtout un client qui
-expose `withdraw3`, `usdSend`, `approveAgent`… dans le même objet). Il embarque un signer minimal
-(`src/hyperliquid/msgpack.ts` ≈ 120 lignes, `signer.ts` ≈ 120 lignes) :
-- hash d'action = `keccak256(msgpack(action) ‖ nonce ‖ vaultAddress? ‖ expiresAfter?)`, phantom agent
-  `{source: "a"|"b", connectionId}`, domaine EIP-712 `Exchange` / chainId 1337 ;
-- **allowlist** dans `AgentSigner.sign` : `order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`,
-  `updateLeverage`, `updateIsolatedMargin`, `scheduleCancel`. Tout autre type est refusé avant hachage, ainsi que
-  tout champ d'action user-signed (`signatureChainId`, `destination`, `amount`, `agentAddress`, `builder`…). Le
-  domaine `HyperliquidSignTransaction` n'existe nulle part dans le code.
-- Vérifié bit à bit contre les vecteurs du SDK Python officiel (`tests/signing_test.py` : dummy, order, order+cloid,
-  vault, TP/SL, mainnet et testnet) et contre l'encodeur `@msgpack/msgpack` (différentiel).
+## Hyperliquid signing (S5.2): in-house signer, no SDK
+The keeper does **not** use `@nktkas/hyperliquid` (4 transitive dependencies, WebSocket, and above all a client that
+exposes `withdraw3`, `usdSend`, `approveAgent`… on the same object). It ships a minimal signer
+(`src/hyperliquid/msgpack.ts` ≈ 120 lines, `signer.ts` ≈ 120 lines):
+- action hash = `keccak256(msgpack(action) ‖ nonce ‖ vaultAddress? ‖ expiresAfter?)`, phantom agent
+  `{source: "a"|"b", connectionId}`, EIP-712 domain `Exchange` / chainId 1337;
+- **allowlist** in `AgentSigner.sign`: `order`, `cancel`, `cancelByCloid`, `modify`, `batchModify`,
+  `updateLeverage`, `updateIsolatedMargin`, `scheduleCancel`. Any other type is refused before hashing, as is
+  any user-signed action field (`signatureChainId`, `destination`, `amount`, `agentAddress`, `builder`…). The
+  `HyperliquidSignTransaction` domain exists nowhere in the code.
+- Verified bit for bit against the official Python SDK vectors (`tests/signing_test.py`: dummy, order, order+cloid,
+  vault, TP/SL, mainnet and testnet) and against the `@msgpack/msgpack` encoder (differential).
 
-**Preuve contre le testnet** (`scripts/sigproof.ts`, 2026-09-27) : une clé aléatoire jamais approuvée signe des
-actions et les poste sur `api.hyperliquid-testnet.xyz/exchange` ; l'API répond
-`User or API Wallet 0x… does not exist.` avec **l'adresse qu'elle a recouvrée** :
+**Proof against the testnet** (`scripts/sigproof.ts`, 2026-09-27): a random, never-approved key signs
+actions and posts them to `api.hyperliquid-testnet.xyz/exchange`; the API responds
+`User or API Wallet 0x… does not exist.` with **the address it recovered**:
 ```
 PASS order (no vault, no expiry)                     recovered = ours
 PASS order + expiresAfter                            recovered = ours
 PASS order + vaultAddress (sub-account) + expiresAfter recovered = ours
 PASS updateLeverage isolated 3x + vaultAddress       recovered = ours
-PASS tampered nonce (contrôle négatif)               recovered ≠ ours
+PASS tampered nonce (negative control)               recovered ≠ ours
 ```
 
-## Moteur de trading (S5.2, `src/hyperliquid/engine.ts`)
-- `open` : `updateLeverage(isolated)` → arme `scheduleCancel` → **un** ordre IOC borné en prix, `cloid` déterministe
-  `(décision, "entry", tentative)` → désarme → relit la position : mode isolé et levier vérifiés, sinon
-  aplatissement. Un `cloid` déjà connu de l'API n'est **jamais renvoyé** (redémarrage entre envoi et persistance).
-- `protect` : stop (obligatoire) et take-profit (optionnel) en triggers **reduce-only**, grouping `positionTpsl`,
-  côté opposé, prix limite à `TRIGGER_LIMIT_BPS` du trigger, puis **relecture** dans `frontendOpenOrders`
-  (coin, trigger, reduce-only, côté, prix, taille). Non relu ⇒ `verified=false` ⇒ le keeper aplatit.
-- `close` : cancel des ordres du coin + IOC reduce-only ; `killSwitch` : cancel de **tous** les ordres + clôture
-  reduce-only de **toutes** les positions, alerte si quelque chose subsiste.
-- ⚠ **Dead-man switch** : `scheduleCancel` annule *tous* les ordres, **y compris le stop-loss**. Il n'est donc armé
-  qu'autour de l'ordre d'entrée et désarmé avant de poser le stop ; si le désarmement échoue après un fill, la
-  position est aplatie. Il ne doit jamais rester armé sur une position protégée (et l'API le réserve aux comptes
-  ayant un volume suffisant : l'armement est *best effort*).
+## Trading engine (S5.2, `src/hyperliquid/engine.ts`)
+- `open`: `updateLeverage(isolated)` → arms `scheduleCancel` → **one** price-bounded IOC order, deterministic `cloid`
+  `(decision, "entry", attempt)` → disarms → reads the position back: isolated mode and leverage verified, otherwise
+  flatten. A `cloid` already known to the API is **never resent** (restart between send and persistence).
+- `protect`: stop (mandatory) and take-profit (optional) as **reduce-only** triggers, `positionTpsl` grouping,
+  opposite side, limit price at `TRIGGER_LIMIT_BPS` from the trigger, then **read-back** in `frontendOpenOrders`
+  (coin, trigger, reduce-only, side, price, size). Not read back ⇒ `verified=false` ⇒ the keeper flattens.
+- `close`: cancel the coin's orders + reduce-only IOC; `killSwitch`: cancel **all** orders + reduce-only close
+  of **all** positions, alert if anything remains.
+- ⚠ **Dead-man switch**: `scheduleCancel` cancels *all* orders, **including the stop-loss**. It is therefore only armed
+  around the entry order and disarmed before placing the stop; if disarming fails after a fill, the
+  position is flattened. It must never remain armed on a protected position (and the API reserves it for accounts
+  with sufficient volume: arming is *best effort*).
 
-## Moniteur indépendant (`src/monitor.ts`)
-Ne partage aucun état avec la boucle. À chaque passage il vérifie : position sur le coin de la décision uniquement,
-côté, marge isolée, levier = `riskParams`, valeur ≤ capital × levier (+5 %), stop reduce-only présent et pas plus
-loin que `stopLossBps`, aucun ordre non reduce-only, agent approuvé et non expirant, `mustClose`. Un constat rouge
-est alerté (une fois par condition continue) et, avec `MONITOR_KILL=1` en mode live, déclenche le kill switch.
+## Independent monitor (`src/monitor.ts`)
+Shares no state with the loop. On each pass it checks: position only on the decision's coin,
+side, isolated margin, leverage = `riskParams`, value ≤ capital × leverage (+5%), reduce-only stop present and no further
+than `stopLossBps`, no non-reduce-only order, agent approved and not expiring, `mustClose`. A red finding
+is alerted (once per continuous condition) and, with `MONITOR_KILL=1` in live mode, triggers the kill switch.
 
-## Bridge Across (S5.3, `src/across/bridge.ts`)
-- **Aller** : exécuté par le vault lui-même (`executeDecision`, destinataire immuable). Le keeper choisit
-  `amount = min(cap 20 % NAV, ledger, maxDepositInstant)`, prend `outputAmount / timestamp / fillDeadline` sur
-  `/suggested-fees`, vérifie `outputAmount ≥ amount × (1 − maxBridgeFeeBps)`, la fenêtre de `quoteTimestamp`
-  (1 h), `fillDeadline ≤ 6 h` et `≥ MIN_FILL_MARGIN_SEC`, et que le SpokePool de la quote est celui du vault.
-- **Suivi** : `/deposit/status` combiné à `balance − usdgLedger` du vault (`classifyDeposit`) : un remboursement
-  de dépôt expiré est détecté sur la chaîne même si l'API est en retard ; un dépôt expiré est signalé et le keeper
-  attend le remboursement du SpokePool (depositor = vault), puis clôt la décision sans trader.
-- **Retour** (`planReturn`) : `withdrawable` du compte de trading → découpage par `/limits` de la route
-  `999 USDC → 4663 USDG` (≈ 246 k$ instantané le 2026-09-27), quote indicative par morceau, et la liste des étapes
-  que **le multisig** doit signer (`subAccountTransfer` → `usdClassTransfer` → `spotSend` vers l'adresse système
-  `0x2000…0000` → dépôts Across sur HyperEVM avec `recipient = vault`), plus l'alternative `withdraw3` → Arbitrum.
-  Le keeper ne signe rien de tout cela.
-- **Sans testnet Across (D6)** : l'intégration `test/live.integration.test.ts` fait tourner une décision complète
-  sur anvil avec le vrai vault et le `MockAcrossSpokePool` (dépôt réel, `release()` pour simuler le retour).
+## Across bridge (S5.3, `src/across/bridge.ts`)
+- **Outbound**: executed by the vault itself (`executeDecision`, immutable recipient). The keeper picks
+  `amount = min(cap 20% NAV, ledger, maxDepositInstant)`, takes `outputAmount / timestamp / fillDeadline` from
+  `/suggested-fees`, checks `outputAmount ≥ amount × (1 − maxBridgeFeeBps)`, the `quoteTimestamp` window
+  (1 h), `fillDeadline ≤ 6 h` and `≥ MIN_FILL_MARGIN_SEC`, and that the quote's SpokePool is the vault's.
+- **Tracking**: `/deposit/status` combined with the vault's `balance − usdgLedger` (`classifyDeposit`): a refund
+  of an expired deposit is detected on-chain even if the API lags; an expired deposit is reported and the keeper
+  waits for the SpokePool refund (depositor = vault), then closes the decision without trading.
+- **Return** (`planReturn`): `withdrawable` of the trading account → split according to `/limits` of the route
+  `999 USDC → 4663 USDG` (≈ $246k instant on 2026-09-27), indicative quote per chunk, and the list of steps
+  that **the multisig** must sign (`subAccountTransfer` → `usdClassTransfer` → `spotSend` to the system address
+  `0x2000…0000` → Across deposits on HyperEVM with `recipient = vault`), plus the `withdraw3` → Arbitrum alternative.
+  The keeper signs none of this.
+- **Without an Across testnet (D6)**: the `test/live.integration.test.ts` integration runs a full decision
+  on anvil with the real vault and the `MockAcrossSpokePool` (real deposit, `release()` to simulate the return).
 
-## Retour, rapports, kill switch (S5.4)
-- `reportPosition(decisionId, equity)` toutes les `REPORT_INTERVAL_MS` (6 h) pendant `holding`, equity = `accountValue`
-  du compte de trading. Purement informatif côté vault (fenêtre de contestation du guardian).
-- `mustClose()` (pause guardian, clôture votée, décision supplantée) ⇒ `closing` : cancel + reduce-only IOC ⇒
-  `closed_on_hl` ⇒ `RETURN PLAN` (alerte critique, `keeper status`, `keeper return-plan`) ⇒ `awaiting_return`.
-- `reportClosed` uniquement quand `balance − usdgLedger ≥ RETURN_TOLERANCE_BPS × equity finale` (ou
-  `FORCE_REPORT_CLOSED_ID`), `finalizeClose` après la fenêtre, `reconcile` pour les morceaux tardifs.
-- Kill switch : `keeper kill`, le moniteur (`MONITOR_KILL=1`), ou automatiquement quand une protection est
-  invérifiable / un levier non conforme. Alertes : console + `ALERT_WEBHOOK_URL` (POST JSON, jamais bloquant).
-- Procédures d'incident : **`RUNBOOK.md`**.
+## Return, reports, kill switch (S5.4)
+- `reportPosition(decisionId, equity)` every `REPORT_INTERVAL_MS` (6 h) during `holding`, equity = `accountValue`
+  of the trading account. Purely informational on the vault side (guardian challenge window).
+- `mustClose()` (guardian pause, voted close, superseded decision) ⇒ `closing`: cancel + reduce-only IOC ⇒
+  `closed_on_hl` ⇒ `RETURN PLAN` (critical alert, `keeper status`, `keeper return-plan`) ⇒ `awaiting_return`.
+- `reportClosed` only when `balance − usdgLedger ≥ RETURN_TOLERANCE_BPS × final equity` (or
+  `FORCE_REPORT_CLOSED_ID`), `finalizeClose` after the window, `reconcile` for late chunks.
+- Kill switch: `keeper kill`, the monitor (`MONITOR_KILL=1`), or automatically when a protection is
+  unverifiable / a leverage is non-compliant. Alerts: console + `ALERT_WEBHOOK_URL` (JSON POST, never blocking).
+- Incident procedures: **`RUNBOOK.md`**.
 
-## Cycle de vie d'une décision (`src/keeper.ts`, persisté dans SQLite)
+## Decision lifecycle (`src/keeper.ts`, persisted in SQLite)
 ```
-idle ──executeDecision──▶ bridging ──fill Across──▶ funding ──USDC sur le compte de trading (multisig)──▶ opening
-  ──IOC rempli──▶ protecting ──stop relu──▶ holding ──mustClose / stop / TP──▶ closing ──flat──▶ closed_on_hl
-  ──instructions au multisig──▶ awaiting_return ──USDG revenu──▶ report_closed ──fenêtre 6 h──▶ finalized
+idle ──executeDecision──▶ bridging ──fill Across──▶ funding ──USDC on the trading account (multisig)──▶ opening
+  ──IOC filled──▶ protecting ──stop read back──▶ holding ──mustClose / stop / TP──▶ closing ──flat──▶ closed_on_hl
+  ──instructions to multisig──▶ awaiting_return ──USDG back──▶ report_closed ──6 h window──▶ finalized
 ```
-Chaque étape est re-dérivée de l'état observé (vault, gouvernance, Hyperliquid, Across) : un redémarrage reprend au
-bon endroit, et une position sans historique local est **adoptée** depuis la chaîne.
+Each stage is re-derived from the observed state (vault, governance, Hyperliquid, Across): a restart resumes at
+the right place, and a position with no local history is **adopted** from the chain.
 
-## Étape 3 de D5 (HyperEVM → HyperCore) et retour
-Le keeper ne peut pas déplacer des fonds sur HyperEVM ni sur HyperCore (clé d'agent). Il **attend** l'USDC sur le
-compte de trading et publie les instructions (alerte) : transfert HyperEVM → adresse système `0x2000…0000`,
-`usdClassTransfer`, `subAccountTransfer`. Idem pour le retour (S5.4) : `withdraw3` / Across `999 → 4663` découpé
-selon `/limits`, signés par le multisig.
+## D5 step 3 (HyperEVM → HyperCore) and return
+The keeper cannot move funds on HyperEVM or on HyperCore (agent key). It **waits** for the USDC on the
+trading account and publishes the instructions (alert): HyperEVM transfer → system address `0x2000…0000`,
+`usdClassTransfer`, `subAccountTransfer`. Same for the return (S5.4): `withdraw3` / Across `999 → 4663` split
+according to `/limits`, signed by the multisig.
 
-## Prise de profit
-`TAKE_PROFIT_TRIGGER=1` (défaut) pose un trigger « take profit » à `takeProfitBps / leverage` du prix d'entrée, soit
-`takeProfitBps` du capital. Avec `0`, le keeper ne pose que le stop et laisse la gouvernance voter la clôture via
-`closeVoteAllowed` (equity rapportée ≥ seuil). Le choix appartient au porteur.
+## Profit taking
+`TAKE_PROFIT_TRIGGER=1` (default) places a "take profit" trigger at `takeProfitBps / leverage` from the entry price, i.e.
+`takeProfitBps` of the capital. With `0`, the keeper places only the stop and lets governance vote the close via
+`closeVoteAllowed` (reported equity ≥ threshold). The choice belongs to the project owner.
 
-## Smoke test live (2026-09-27, lecture seule)
+## Live smoke test (2026-09-27, read-only)
 ```
 [rpc] chainId=4663 block=73667949
 [across spoke pool] numberOfDeposits=373002 depositQuoteTimeBuffer=3600 fillDeadlineBuffer=21600
@@ -149,14 +149,14 @@ selon `/limits`, signés par le multisig.
 [across] 4663 USDG → 999 USDC: min=0.50 maxInstant=260534.15 max=542794.73
 [across] 10000$ → out=9994.00 fee=6bps eta=2s  (quoteTs +7200s = fillDeadline)
 [across] 100000$ → out=99940.00 fee=5bps eta=98s
-[across] 999 USDC → 4663 USDG (retour): min=0.50 maxInstant=246229.76 max=246229.76
+[across] 999 USDC → 4663 USDG (return): min=0.50 maxInstant=246229.76 max=246229.76
 ```
 
 ## Tests
-- `rounding` : règles tick/lot Hyperliquid (5 chiffres significatifs, `6 − szDecimals` décimales), arithmétique
-  décimale exacte ;
-- `planner` : chaque borne du vault et du SpokePool, allowlist, dimensionnement, prix de protection ;
-- `keeper` : machine à états complète avec exécuteur scripté (fill partiel, stop manquant, stop non vérifié →
-  aplatissement, remboursement Across, timeout du retour, override, adoption, expiration de l'agent) ;
-- `chain.integration` : vrais `WarchestGovernance` + `WarchestVault` sur anvil (décision quorate réelle, conversion
-  réelle, plan `executeDecision` valide).
+- `rounding`: Hyperliquid tick/lot rules (5 significant figures, `6 − szDecimals` decimals), exact decimal
+  arithmetic;
+- `planner`: every vault and SpokePool bound, allowlist, sizing, protection prices;
+- `keeper`: full state machine with a scripted executor (partial fill, missing stop, unverified stop →
+  flatten, Across refund, return timeout, override, adoption, agent expiry);
+- `chain.integration`: real `WarchestGovernance` + `WarchestVault` on anvil (real quorate decision, real
+  conversion, valid `executeDecision` plan).

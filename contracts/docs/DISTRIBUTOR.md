@@ -1,38 +1,38 @@
-# WarchestDistributor (S3.4) — module optionnel (D7)
+# WarchestDistributor (S3.4) — optional module (D7)
 
-> **Décision juridique en attente (D7).** Le vault reçoit l'adresse du distributor dans son constructeur, sous forme **immutable**.
-> - Avec `address(0)`, la distribution est **désactivée définitivement** pour ce déploiement.
-> - Pour l'activer, il faut déployer le distributor **avant** le vault, puis appeler `dist.setVault(vault)`.
+> **Pending legal decision (D7).** The vault receives the distributor address in its constructor, as an **immutable**.
+> - With `address(0)`, distribution is **permanently disabled** for this deployment.
+> - To enable it, the distributor must be deployed **before** the vault, then `dist.setVault(vault)` must be called.
 
-## Flux
-1. `fund()` (permissionless) tire `vault.distributable()`, c'est-à-dire le profit réalisé au-dessus du high-water mark, quand aucune position n'est ouverte. Le montant est **mesuré** par variation de solde, pas déclaré.
-2. L'indexer répartit chaque financement selon les poids du snapshot (Σ lot × level) et publie un arbre de **droits cumulés** `(account, cumulativeAmount)`, feuille séparée par `chainid` et adresse du contrat.
-3. `proposeRoot(root, totalCumulative, treeHash)` : le root est en attente pendant `timelock`, et le guardian peut le révoquer. **Un root en attente ne peut pas être remplacé par l'updater.** C'est la correction du défaut de Morpho URD, où un updater compromis relance le délai à l'infini.
-4. `acceptRoot()` est permissionless une fois le délai écoulé.
-5. `claim(account, cumulative, proof)` verse `cumulative − claimed[account]` au compte. N'importe qui peut déclencher le versement.
+## Flow
+1. `fund()` (permissionless) pulls `vault.distributable()`, i.e. the realized profit above the high-water mark, when no position is open. The amount is **measured** via balance change, not declared.
+2. The indexer allocates each funding according to the snapshot weights (Σ lot × level) and publishes a tree of **cumulative entitlements** `(account, cumulativeAmount)`, with leaves domain-separated by `chainid` and contract address.
+3. `proposeRoot(root, totalCumulative, treeHash)`: the root is pending for `timelock`, and the guardian can revoke it. **A pending root cannot be replaced by the updater.** This is the fix for the Morpho URD flaw, where a compromised updater restarts the delay indefinitely.
+4. `acceptRoot()` is permissionless once the delay has elapsed.
+5. `claim(account, cumulative, proof)` pays `cumulative − claimed[account]` to the account. Anyone can trigger the payout.
 
-## Bornes de sécurité
-- `totalCumulative ≤ totalFunded`, et ne diminue jamais.
-- `totalClaimed ≤ totalCumulative` du root actif. Un arbre sous-déclaré ne peut donc que bloquer les derniers claimers, jamais faire sortir plus que prévu.
-- Le guardian ne peut **jamais** déplacer de fonds. Ses seuls pouvoirs sont `setVault` (une seule fois), `proposeUpdater` / `cancelUpdaterChange`, `revokePendingRoot` et le transfert de son rôle en deux étapes.
+## Safety bounds
+- `totalCumulative ≤ totalFunded`, and never decreases.
+- `totalClaimed ≤ totalCumulative` of the active root. An under-declared tree can therefore only block the last claimers, never release more than intended.
+- The guardian can **never** move funds. Its only powers are `setVault` (once), `proposeUpdater` / `cancelUpdaterChange`, `revokePendingRoot` and the two-step transfer of its role.
 
-## Rotation de l'updater (revue de sécurité, constat haut, corrigé)
-Avant : `setUpdater` était instantané. Le guardian seul pouvait se nommer updater, proposer un root qui lui versait tout le profit financé, et personne d'autre que lui ne pouvait révoquer ce root : après le timelock, `acceptRoot` et `claim` étaient permissionless. Violation directe de D9 (« le guardian ne déplace jamais de fonds »).
+## Updater rotation (security review, high finding, fixed)
+Before: `setUpdater` was instantaneous. The guardian alone could appoint itself updater, propose a root paying itself all the funded profit, and nobody but itself could revoke that root: after the timelock, `acceptRoot` and `claim` were permissionless. A direct violation of D9 ("the guardian never moves funds").
 
-Maintenant, calqué sur `WarchestGovernance` :
-- `proposeUpdater(next)` (guardian) émet `UpdaterChangeProposed(next, readyAt)` avec `readyAt = now + updaterDelay`, où **`updaterDelay = timelock + 3 jours`** (immutable, 4 jours avec le timelock recommandé de 1 jour).
-- `cancelUpdaterChange()` (guardian) annule ; `applyUpdaterChange()` est **permissionless** une fois `readyAt` atteint. L'ancien updater garde son rôle pendant tout le préavis.
-- Un root proposé par le nouvel updater attend encore son propre `timelock`.
+Now, modeled on `WarchestGovernance`:
+- `proposeUpdater(next)` (guardian) emits `UpdaterChangeProposed(next, readyAt)` with `readyAt = now + updaterDelay`, where **`updaterDelay = timelock + 3 days`** (immutable, 4 days with the recommended 1-day timelock).
+- `cancelUpdaterChange()` (guardian) cancels; `applyUpdaterChange()` is **permissionless** once `readyAt` is reached. The old updater keeps its role throughout the notice period.
+- A root proposed by the new updater still waits for its own `timelock`.
 
-Confiance résiduelle, documentée : après ce préavis public de ≥ 4 jours, puis le timelock du root, la paire guardian + updater peut encore mal répartir le profit **déjà financé** (jamais le principal, le vault ne cède que `distributable()`). L'attaque la plus rapide est donc annoncée on-chain pendant `updaterDelay + timelock ≥ 5 jours` (`UpdaterChangeProposed`, `UpdaterChanged`, `RootProposed` avec `treeHash`), ce que le vérificateur indépendant détecte et ce qui laisse le temps de contester le multisig. Aucune borne on-chain supplémentaire n'a été retenue : un plafond par compte ou par root n'est pas sain (le guardian peut fractionner sur des adresses qu'il contrôle, et une répartition légitime peut concentrer les droits sur un gros holder).
+Residual trust, documented: after this public notice of ≥ 4 days, followed by the root timelock, the guardian + updater pair can still misallocate **already funded** profit (never the principal, the vault only releases `distributable()`). The fastest attack is therefore announced on-chain for `updaterDelay + timelock ≥ 5 days` (`UpdaterChangeProposed`, `UpdaterChanged`, `RootProposed` with `treeHash`), which the independent verifier detects and which leaves time to challenge the multisig. No additional on-chain bound was retained: a per-account or per-root cap is not sound (the guardian can split across addresses it controls, and a legitimate allocation can concentrate entitlements on a large holder).
 
 ## Tests
-`test/WarchestDistributor.t.sol` : 15 tests branchés sur le **vrai** `WarchestVault`, plus `test_regression_distributorGuardianCannotStealFundedProfit` dans `WarchestVaultReviewRegression.t.sol`. Couverts :
-- profit, perte, HWM ;
-- timelock et révocation ;
-- impossibilité de relancer le délai ;
-- claims cumulés sur deux cycles ;
-- preuves falsifiées ;
-- arbre sous-déclaré ;
-- guardian sans pouvoir sur les fonds ni sur les roots ;
-- rotation de l'updater : délai, annulation, application permissionless, événements, PoC du vol rejoué.
+`test/WarchestDistributor.t.sol`: 15 tests wired to the **real** `WarchestVault`, plus `test_regression_distributorGuardianCannotStealFundedProfit` in `WarchestVaultReviewRegression.t.sol`. Covered:
+- profit, loss, HWM;
+- timelock and revocation;
+- inability to restart the delay;
+- cumulative claims over two cycles;
+- forged proofs;
+- under-declared tree;
+- guardian with no power over funds or roots;
+- updater rotation: delay, cancellation, permissionless application, events, theft PoC replayed.

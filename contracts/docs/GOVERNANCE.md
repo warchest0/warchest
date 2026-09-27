@@ -1,69 +1,69 @@
 # WarchestGovernance
 
-Contrat **séparé du vault**, qui ne détient **aucun fonds**. Il fait trois choses :
-1. Stocker les roots merkle de poids, un par snapshot quotidien.
-2. Compter les votes.
-3. Exposer les décisions via `IWarchestDecisionSource`.
+A contract **separate from the vault**, holding **no funds**. It does three things:
+1. Stores the merkle weight roots, one per daily snapshot.
+2. Counts votes.
+3. Exposes decisions via `IWarchestDecisionSource`.
 
-## Poids de vote (D1, D2)
-- `poids(wallet) = Σ lot.montant × level(lot)`, avec un level de 0 à 10 et des lots LIFO, calculés off-chain par l'indexer.
-- Feuille de l'arbre : `keccak256(bytes.concat(keccak256(abi.encode(chainid, governance, epoch, account, weight))))`, arbre à paires triées, standard OpenZeppelin. La feuille est séparée par chaîne et par contrat.
-- Cycle de vie d'un root :
-  - `submitWeightRoot(epoch, root, totalWeight, treeHash)` est réservé à l'`updater`.
-  - `epoch` est un index de jour UTC, strictement croissant et au plus égal à l'index de demain.
-  - `0 < totalWeight ≤ MAX_TOTAL_WEIGHT`, pour que le calcul du quorum ne puisse jamais déborder.
-  - Révoquer la dernière epoch fait revenir `latestEpoch` à la précédente (liste chaînée `prevEpoch`), ce qui permet de la resoumettre.
-  - Le root devient utilisable après `challengeWindow`. Pendant cette fenêtre, le `guardian` peut le révoquer (`revokeWeightRoot`).
+## Voting weight (D1, D2)
+- `weight(wallet) = Σ lot.amount × level(lot)`, with a level from 0 to 10 and LIFO lots, computed off-chain by the indexer.
+- Tree leaf: `keccak256(bytes.concat(keccak256(abi.encode(chainid, governance, epoch, account, weight))))`, sorted-pair tree, OpenZeppelin standard. The leaf is domain-separated by chain and by contract.
+- Root lifecycle:
+  - `submitWeightRoot(epoch, root, totalWeight, treeHash)` is restricted to the `updater`.
+  - `epoch` is a UTC day index, strictly increasing and at most equal to tomorrow's index.
+  - `0 < totalWeight ≤ MAX_TOTAL_WEIGHT`, so that the quorum computation can never overflow.
+  - Revoking the latest epoch rolls `latestEpoch` back to the previous one (`prevEpoch` linked list), which allows it to be resubmitted.
+  - The root becomes usable after `challengeWindow`. During this window, the `guardian` can revoke it (`revokeWeightRoot`).
 
 ## Rounds
-| Type | Ouverture | Options |
+| Type | Opening | Options |
 |---|---|---|
-| Direction | `startDirectionRound(epoch)`, permissionless | `assetIndex*2 + side` (Long = 0, Short = 1) sur la liste fermée d'actifs, **copiée au démarrage** |
-| Close | `startCloseRound(epoch)`, permissionless si `vault.closeVoteAllowed(decisionId)` | 0 = garder, 1 = fermer |
+| Direction | `startDirectionRound(epoch)`, permissionless | `assetIndex*2 + side` (Long = 0, Short = 1) over the closed asset list, **copied at start** |
+| Close | `startCloseRound(epoch)`, permissionless if `vault.closeVoteAllowed(decisionId)` | 0 = keep, 1 = close |
 
-- Le snapshot d'un round doit être **le plus récent utilisable** (`latestUsableEpoch()`) : ni en attente, ni révoqué, ni périmé. Personne ne peut donc choisir un snapshot plus ancien qui l'avantage.
-- Il y a au plus un round actif par type. Un round Direction et un round Close peuvent tourner en parallèle.
-- `vote(round, option, weight, proof)` : un vote par wallet et par round, avec le poids complet du snapshot. Un transfert de tokens après le snapshot ne change rien, ce qui rend le double vote impossible.
+- A round's snapshot must be **the most recent usable one** (`latestUsableEpoch()`): not pending, not revoked, not stale. Nobody can therefore pick an older snapshot that favors them.
+- There is at most one active round per type. A Direction round and a Close round can run in parallel.
+- `vote(round, option, weight, proof)`: one vote per wallet per round, with the full snapshot weight. A token transfer after the snapshot changes nothing, which makes double voting impossible.
 
-## Finalisation (`finalize`, permissionless après `endsAt`)
-- Un round n'est **valide** que s'il n'a pas été annulé (voir ci-dessous) **et** qu'il est finalisé au plus tard `votingPeriod` après `endsAt`. Un round invalide retombe toujours sur la décision précédente.
-- Quorum : `totalVoted × 10 000 ≥ quorumBps × totalWeight(snapshot)`.
-- **Direction** : une **nouvelle** décision (id + 1) n'est créée que si le quorum est atteint **et** que l'option gagnante est unique (pas d'égalité).
-  - Sinon, **la décision précédente reste en place avec le même id** (D8). Il n'y a pas de rouverture automatique : le vault exécute chaque id au plus une fois, donc une position stoppée ne se rouvre qu'après une nouvelle décision ayant atteint le quorum.
-- **Close** : `isCloseRequested(decisionId)` passe à vrai si le quorum est atteint et que « fermer » l'emporte strictement.
+## Finalization (`finalize`, permissionless after `endsAt`)
+- A round is **valid** only if it has not been cancelled (see below) **and** it is finalized no later than `votingPeriod` after `endsAt`. An invalid round always falls back to the previous decision.
+- Quorum: `totalVoted × 10,000 ≥ quorumBps × totalWeight(snapshot)`.
+- **Direction**: a **new** decision (id + 1) is created only if the quorum is reached **and** the winning option is unique (no tie).
+  - Otherwise, **the previous decision stays in place with the same id** (D8). There is no automatic reopening: the vault executes each id at most once, so a stopped-out position is only reopened after a new decision that reached quorum.
+- **Close**: `isCloseRequested(decisionId)` becomes true if the quorum is reached and "close" strictly wins.
 
-## Rôles (D9)
-- **`guardian`** (multisig) :
-  - peut : `setPaused`, `cancelRound`, `revokeWeightRoot` (pendant la fenêtre de challenge), `proposeUpdater`, `setEligibleAssets` (pour les rounds futurs uniquement), `setVault` (une seule fois), transfert du rôle en deux étapes ;
-  - une **pause annule tous les rounds en cours**, et `cancelRound` fait de même pour un round précis : un round annulé ne peut que retomber sur la décision précédente. Le guardian peut donc bloquer une décision, mais jamais la choisir ;
-  - la rotation de l'updater est **différée** de `challengeWindow + votingPeriod + maxRootAge` (72 h avec les valeurs proposées). Elle est publique pendant tout ce délai, puis n'importe qui peut l'appliquer (`applyUpdaterChange`). Le guardian ne peut donc pas prendre la place de l'updater et falsifier les poids à l'intérieur d'un seul round ;
-  - ne peut jamais : modifier un vote ou un tally, ni imposer une décision.
-- **`updater`** (indexer) : ne peut que soumettre des roots.
+## Roles (D9)
+- **`guardian`** (multisig):
+  - can: `setPaused`, `cancelRound`, `revokeWeightRoot` (during the challenge window), `proposeUpdater`, `setEligibleAssets` (for future rounds only), `setVault` (only once), two-step role transfer;
+  - a **pause cancels all ongoing rounds**, and `cancelRound` does the same for a specific round: a cancelled round can only fall back to the previous decision. The guardian can therefore block a decision, but never choose one;
+  - updater rotation is **delayed** by `challengeWindow + votingPeriod + maxRootAge` (72 h with the proposed values). It is public for the entire delay, after which anyone can apply it (`applyUpdaterChange`). The guardian therefore cannot take the updater's place and forge the weights within a single round;
+  - can never: modify a vote or a tally, or impose a decision.
+- **`updater`** (indexer): can only submit roots.
 
-## Paramètres immuables (`Params`)
+## Immutable parameters (`Params`)
 `challengeWindow`, `votingPeriod`, `maxRootAge`, `quorumBps`.
 
-Valeurs proposées : 6 h, 24 h, 48 h, 10 %.
+Proposed values: 6 h, 24 h, 48 h, 10%.
 
 ## Tests
-- `WarchestGovernanceRoots`, `WarchestGovernanceVoting`, `WarchestGovernanceDecisions` (dont les scénarios D8 avec `MockDecisionVault`).
-- Invariants dans `invariant/GovernanceInvariant` :
-  - Σ tallies = totalVoted ≤ poids total ;
-  - ids de décision monotones ;
-  - un seul round actif ;
-  - aucun fonds détenu.
+- `WarchestGovernanceRoots`, `WarchestGovernanceVoting`, `WarchestGovernanceDecisions` (including the D8 scenarios with `MockDecisionVault`).
+- Invariants in `invariant/GovernanceInvariant`:
+  - Σ tallies = totalVoted ≤ total weight;
+  - monotonic decision ids;
+  - a single active round;
+  - no funds held.
 
-## Revue de sécurité (Fable, 2026-09-27)
-Constats corrigés, chacun couvert par un test de régression dans `WarchestGovernanceHardening` :
-- **Haute** : le guardian pouvait forcer une décision en choisissant le moment de la pause.
-- **Haute** : le guardian pouvait prendre la place de l'updater et falsifier les poids.
-- **Haute** : une epoch très lointaine bloquait définitivement les soumissions.
-- **Moyenne** : un `totalWeight` nul, ou assez grand pour faire déborder le calcul du quorum, était accepté.
-- **Moyenne** : on pouvait choisir un snapshot plus ancien et plus favorable.
-- **Basse** : un round finalisé très en retard produisait quand même une décision.
-- **Info** : la feuille n'était pas séparée par chaîne et par contrat.
+## Security review (Fable, 2026-09-27)
+Fixed findings, each covered by a regression test in `WarchestGovernanceHardening`:
+- **High**: the guardian could force a decision by choosing the timing of the pause.
+- **High**: the guardian could take the updater's place and forge the weights.
+- **High**: a far-future epoch permanently blocked submissions.
+- **Medium**: a zero `totalWeight`, or one large enough to overflow the quorum computation, was accepted.
+- **Medium**: an older, more favorable snapshot could be chosen.
+- **Low**: a round finalized very late still produced a decision.
+- **Info**: the leaf was not domain-separated by chain and by contract.
 
-Consignes de design transmises au vault :
-- une clôture demandée est exécutée **sans condition** ;
-- une décision remplacée par une plus récente impose de **fermer puis rouvrir** la position ;
-- l'ancienneté d'une décision se juge sur `getRound(roundId).endsAt`.
+Design guidelines passed on to the vault:
+- a requested close is executed **unconditionally**;
+- a decision superseded by a more recent one requires **closing then reopening** the position;
+- a decision's age is judged by `getRound(roundId).endsAt`.

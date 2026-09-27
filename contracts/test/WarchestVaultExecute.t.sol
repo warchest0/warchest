@@ -42,7 +42,7 @@ contract WarchestVaultExecuteTest is VaultFixture {
     }
 
     function _now() internal view returns (uint32) {
-        return uint32(block.timestamp);
+        return uint32(vm.getBlockTimestamp());
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -72,24 +72,25 @@ contract WarchestVaultExecuteTest is VaultFixture {
         WarchestVault.Bridge memory b = _bridge();
         b.spokePool = IAcrossSpokePool(address(0));
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, gov, _venue(), b, _conversionParams(), _orderParams());
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), b, _conversionParams(), _orderParams());
         b = _bridge();
         b.recipient = address(0);
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, gov, _venue(), b, _conversionParams(), _orderParams());
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), b, _conversionParams(), _orderParams());
         b = _bridge();
         b.outputToken = address(0);
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
-        new WarchestVault(guardian, keeper, gov, _venue(), b, _conversionParams(), _orderParams());
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), b, _conversionParams(), _orderParams());
         b = _bridge();
         b.destinationChainId = 0;
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, gov, _venue(), b, _conversionParams(), _orderParams());
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), b, _conversionParams(), _orderParams());
         vm.expectRevert(WarchestVault.ZeroAddress.selector);
         new WarchestVault(
             guardian,
             keeper,
             IWarchestDecisionSource(address(0)),
+            distributor,
             _venue(),
             _bridge(),
             _conversionParams(),
@@ -125,12 +126,12 @@ contract WarchestVaultExecuteTest is VaultFixture {
         // a zero bridge fee bound (must receive 100%) is allowed
         p = _orderParams();
         p.maxBridgeFeeBps = 0;
-        new WarchestVault(guardian, keeper, gov, _venue(), _bridge(), _conversionParams(), p);
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), _bridge(), _conversionParams(), p);
     }
 
     function _expectInvalidOrderParams(WarchestVault.OrderParams memory p) internal {
         vm.expectRevert(WarchestVault.InvalidParams.selector);
-        new WarchestVault(guardian, keeper, gov, _venue(), _bridge(), _conversionParams(), p);
+        new WarchestVault(guardian, keeper, gov, distributor, _venue(), _bridge(), _conversionParams(), p);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -156,7 +157,7 @@ contract WarchestVaultExecuteTest is VaultFixture {
         assertEq(p.asset, BTC);
         assertEq(uint8(p.side), uint8(IWarchestDecisionSource.Side.Long));
         assertEq(p.capital, amount);
-        assertEq(p.openedAt, block.timestamp);
+        assertEq(p.openedAt, vm.getBlockTimestamp());
         assertEq(p.depositId, 0);
         assertEq(vault.lastExecutedDecisionId(), id);
         assertEq(vault.usdgLedger(), ledger0 - amount);
@@ -307,7 +308,7 @@ contract WarchestVaultExecuteTest is VaultFixture {
     }
 
     function test_execute_revertsStaleDecision() public {
-        uint64 endsAt = uint64(block.timestamp);
+        uint64 endsAt = uint64(vm.getBlockTimestamp());
         gov.setDecision(1, BTC, IWarchestDecisionSource.Side.Long, 7, endsAt);
         vm.warp(endsAt + MAX_DECISION_AGE + 1);
         vm.prank(keeper);

@@ -3,7 +3,8 @@
 Contrat `contracts/src/WarchestVault.sol`. Il **détient la trésorerie**. Il est séparé de `WarchestGovernance`, qui ne
 détient rien et ne fait que publier des décisions (`IWarchestDecisionSource`). Aucun owner, aucun proxy, aucune
 fonction qui envoie de l'ETH ou de l'USDG vers une adresse arbitraire : les seules sorties de fonds sont le pool de
-conversion (S3.1) et le SpokePool Across vers un destinataire **immuable** (S3.2).
+conversion (S3.1), le SpokePool Across vers un destinataire **immuable** (S3.2) et, si un distributeur immuable a été
+fixé au déploiement, le profit réalisé au-dessus du high-water mark (S3.3, désactivé tant que D7 est ouvert).
 
 ## 1. Garde (S3.1)
 
@@ -128,18 +129,100 @@ destinataire, ni exécuter deux fois, ni ouvrir une seconde position, ni brader 
 **le timing** (exécuter au pire moment du marché) et ce qu'il fait *sur Hyperliquid* avec l'agent (voir
 `RESEARCH.md` §2.3), hors de portée du vault.
 
-## 5. Rôles (S3.1–S3.2)
+## 5. Rapports, clôture, PnL, high-water mark (S3.3)
+
+### Rapports d'equity avec fenêtre de contestation
+- `reportPosition(decisionId, equityUsd)` (keeper, hors pause) : valeur mark-to-market du compte Hyperliquid pour la
+  position ouverte. Le rapport **ne compte qu'après `reportChallengeWindow`** (6 h recommandées) ; pendant cette
+  fenêtre le guardian peut le révoquer (`revokeReport`). Un nouveau rapport remplace le rapport en attente et
+  relance la fenêtre ; un rapport déjà mûr est conservé comme rapport « final » jusqu'à ce qu'un plus récent
+  mûrisse. `finalizedEquity(decisionId)` renvoie l'equity qui compte (et si elle existe).
+- Un rapport est **purement informatif** : il ne déplace jamais de fonds et ne change aucune balance. Son seul
+  effet est d'autoriser un vote de clôture.
+- `closeVoteAllowed(decisionId)` (lu par `WarchestGovernance.startCloseRound`, ne revert jamais) = position ouverte
+  pour cet id **et** pas en cours de clôture **et** `!mustClose()` (pas supplantée, pas déjà votée, pas en pause)
+  **et** equity finalisée `≥ capital × (1 + takeProfitBps)`.
+
+### Clôture : le keeper déclare, la chaîne mesure
+- Une fois `mustClose()` vrai (clôture votée — **inconditionnelle, sans revérifier le seuil** —, décision
+  supplantée, ou pause), le keeper ferme sur Hyperliquid, le multisig signe le retour (D4, jamais le keeper), et le
+  keeper appelle `reportClosed(decisionId)` (autorisé **même en pause** : rapatrier les fonds est toujours
+  souhaitable).
+- Le guardian dispose de `reportChallengeWindow` pour `revokeCloseReport` (par exemple si la position est encore
+  ouverte sur Hyperliquid) ; la position redevient « ouverte ».
+- `finalizeClose(decisionId)` (permissionless, après la fenêtre) mesure **on-chain** ce qui est revenu :
+  `returned = usdg.balanceOf(vault) − usdgLedger`, c'est-à-dire tout l'USDG entré de l'extérieur depuis la dernière
+  comptabilisation (fill du relayer Across sur le retour, remboursement d'un dépôt expiré, ou **rien du tout**).
+  **Le keeper ne déclare jamais un montant** : il n'y a pas de paramètre pour ça. `pnl = returned − capital`,
+  `cumulativePnl += pnl`, la position est effacée, une nouvelle décision peut s'exécuter.
+- Chemins de perte : position liquidée ou stoppée avec rien qui revient → `returned = 0`, `pnl = −capital`, le
+  vault continue avec sa NAV liquide restante (`test_finalizeClose_nothingReturned_vaultNotBricked`). Dépôt Across
+  jamais rempli → le SpokePool rembourse le vault (depositor) → `pnl ≈ 0`.
+- Retours en plusieurs morceaux (limite Across ≈ 278 k$/transfert, `RESEARCH.md` §3.2) : ce qui arrive après la
+  finalisation est comptabilisé par `reconcile()` (keeper, position fermée uniquement) comme **retour tardif** de la
+  dernière position (`LateReturn`, PnL à la hausse). Sans aucune position jamais fermée, c'est un `Donation`
+  (principal, pas de PnL). `reconcile` ne peut qu'**augmenter** le ledger ; un keeper ne peut pas s'en servir pour
+  sortir des fonds.
+
+### Ce que le keeper peut faire de pire avec les rapports
+- Rapporter une equity fictive → au pire un vote de clôture inutile, si le guardian ne révoque pas ; aucun fonds ne
+  bouge.
+- Déclarer la clôture alors que rien n'est revenu → après la fenêtre, `pnl = −capital` **comptable** (la position
+  reste réelle sur Hyperliquid, contrôlée par le multisig) et une nouvelle décision devient exécutable : l'exposition
+  par décision est inchangée (≤ 20 % de la NAV **liquide**, une fois par décision quorate), donc le rythme des
+  décisions de gouvernance borne la sortie totale. Le guardian a une fenêtre pour révoquer, puis peut pauser.
+- Spammer des rapports après révocation → la pause bloque `reportPosition`.
+Tout cela est joué dans `WarchestVaultMaliciousKeeper.t.sol`.
+
+### PnL réalisé, high-water mark et point d'ancrage de la distribution
+- `cumulativePnl` (signé) = Σ (`returned − capital`) des positions fermées + retours tardifs. Les fees du hook
+  (ETH) et les variations du prix de l'ETH sont du **principal**, jamais du PnL : la NAV n'est pas la base du HWM,
+  précisément pour que des entrées de fees ne soient jamais « distribuées » comme des profits.
+- `highWaterMark` = PnL cumulé **déjà distribué**. Il ne bouge que dans `pullDistributable` (+= montant), donc il est
+  monotone (`invariant_pnlAndHighWaterMark`). Après une perte, tout doit être regagné avant qu'un centime ne soit à
+  nouveau distribuable (`test_highWaterMark_lossMustBeRecoveredFirst`).
+- `distributable()` = `max(0, cumulativePnl − highWaterMark)`, plafonné par `usdgLedger`, et **0 tant qu'une position
+  est ouverte** (le résultat de la position en cours n'est pas réalisé).
+- `pullDistributable(amount)` : uniquement `distributor`, immuable, fixé au déploiement. `address(0)` = distribution
+  **définitivement désactivée** pour ce déploiement. C'est le seul point d'entrée du futur `WarchestDistributor`
+  (S3.4, D7). ⚠ Conséquence : D7 (ou au moins l'adresse/le code du distributeur, prévisible par CREATE2) doit être
+  tranché **avant** le déploiement mainnet du vault, sinon la trésorerie ne pourra jamais distribuer ; l'adresse du
+  vault est elle-même immuable dans le hook.
+
+### Pause
+`setPaused(true)` bloque `convertEthToUsdg`, `executeDecision`, `reportPosition` et `pullDistributable`, et met
+`mustClose()` à vrai : le keeper doit déboucler. `reportClosed`, `revokeCloseReport` et `finalizeClose` restent
+possibles pour rapatrier et comptabiliser les fonds. `receive()` n'est jamais bloqué.
+
+## 10. Risques résiduels (hors de portée du vault)
+- **Hyperliquid** : le stop-loss est un trigger order posé par le keeper ; un keeper compromis peut ne pas le poser,
+  trader contre une contrepartie complice (`RESEARCH.md` §2.3) ou sur-lever. Mitigations : agent trading-only à
+  expiration courte, moniteur indépendant, multisig seul signataire des retours. Le vault ne voit que ce qui revient.
+- **Multisig HL (D4)** : seul garant du retour des fonds ; sa clé HyperEVM fait l'étape HyperEVM → HyperCore.
+- **Across** : contrat upgradable par Across ; une nouvelle ABI sans `deposit(bytes32,…)` bloquerait
+  `executeDecision` (fail-closed, fonds intacts). Un dépôt non rempli est remboursé au vault. Un relayer peut au
+  pire capter `maxBridgeFeeBps`.
+- **Oracle TWAP** : une fenêtre de 30 min sur un pool de 19,6 M$ ; la borne est « pas pire que TWAP × 0,99 », pas
+  « meilleur prix ». Si le pool perdait sa liquidité, les conversions échoueraient (fail-closed).
+- **Gouvernance** : une décision quorate malveillante (capture par une baleine) reste une décision : le vault
+  l'exécute dans la limite de 20 % de la NAV liquide, une fois.
+- **Keeper honnête mais absent** : rien ne se passe ; les décisions expirent (`maxDecisionAge`) et doivent être
+  revotées.
+- **Distribution** : immuable et désactivée par défaut ; le choix D7 conditionne le déploiement (voir §5).
+
+## 6. Rôles (S3.1–S3.3)
 
 | Rôle | Peut | Ne peut jamais |
 |---|---|---|
-| `keeper` (EOA bot, remplaçable) | `convertEthToUsdg`, `executeDecision` sous les bornes ci-dessus | envoyer des fonds ailleurs, changer un paramètre, rejouer une décision |
-| `guardian` (multisig, D9) | `setPaused`, `setKeeper`, transfert du rôle en deux étapes | déplacer des fonds, changer le pool, le SpokePool, le destinataire, les caps |
-| gouvernance | fournir la décision courante et la demande de clôture | appeler le vault (elle ne fait que le lire via `closeVoteAllowed`, S3.3) |
-| n'importe qui | envoyer de l'ETH | — |
+| `keeper` (EOA bot, remplaçable) | `convertEthToUsdg`, `executeDecision` sous les bornes ci-dessus ; `reportPosition`, `reportClosed`, `reconcile` (information et comptabilité, jamais de mouvement de fonds) | envoyer des fonds ailleurs, changer un paramètre, rejouer une décision, déclarer un montant revenu |
+| `guardian` (multisig, D9) | `setPaused`, `setKeeper`, transfert du rôle en deux étapes, `revokeReport` et `revokeCloseReport` pendant la fenêtre de contestation | déplacer des fonds, changer le pool, le SpokePool, le destinataire, les caps, forcer une clôture comptable |
+| `distributor` (immuable, S3.4) | `pullDistributable(amount ≤ distributable())` | toucher au principal ou à un profit sous le high-water mark |
+| gouvernance | fournir la décision courante et la demande de clôture | appeler le vault (elle ne fait que le lire via `closeVoteAllowed`) |
+| n'importe qui | envoyer de l'ETH, `finalizeClose` après la fenêtre | — |
 
 Tous les paramètres sont `immutable`. La pause bloque les actions du keeper, jamais `receive()`.
 
-## 6. Mocks livrés
+## 7. Mocks livrés
 - `src/mocks/MockAcrossSpokePool.sol` : reproduit les contrôles du vrai `deposit` (fenêtre de `quoteTimestamp`,
   buffer de `fillDeadline`, règle d'exclusivité, tirage ERC20, `depositId`, événement) et garde les tokens ;
   `release()` permissionless simule un fill ou un remboursement (**testnet uniquement**, D6). Compilé en `via_ir`
@@ -147,14 +230,14 @@ Tous les paramètres sont `immutable`. La pause bloque les actions du keeper, ja
 - `test/mocks/MockUniswapV3Pool.sol` (TWAP et prix d'exécution découplés), `MockWETH`, `MockUSDG`,
   `MockDecisionSource`.
 
-## 7. Gas mesuré (fork mainnet, 2026-09-27)
+## 8. Gas mesuré (fork mainnet, 2026-09-27)
 
 | Fonction | Gas |
 |---|---|
 | `convertEthToUsdg(10 ETH)` à froid | 296 974 – 304 012 |
 | `executeDecision` (vrai SpokePool) à froid | 322 795 |
 
-## 8. Tests
+## 9. Tests
 - `test/WarchestVaultConversion.t.sol` : construction, garde, conversion (chemins nominaux, tous les reverts, sandwich,
   fill partiel, oracle trop court), callback, maths de l'oracle (arrondi, branche haute), NAV, keeper malveillant
   (fuzz), rôles.
@@ -166,6 +249,24 @@ Tous les paramètres sont `immutable`. La pause bloque les actions du keeper, ja
 - `test/invariant/VaultInvariant.t.sol` : conservation ETH et USDG (vault + SpokePool), ledger = balance, jamais vendu
   sous le plancher, cap et destinataire respectés à chaque ordre, une exécution par décision, position cohérente,
   aucun fonds chez keeper / guardian / attaquant / destinataire.
+- `test/WarchestVaultReports.t.sol` : rapports (fenêtre, remplacement, promotion, révocation), `closeVoteAllowed`
+  (seuil exact, tous les cas « faux », fuzz « ne revert jamais »), clôture (profit, perte, rien revenu, remboursement
+  Across, arrivées pendant la fenêtre, révocation), `reconcile` (retour tardif, don), high-water mark et
+  `pullDistributable` (désactivé sans distributeur).
+- `test/WarchestVaultMaliciousKeeper.t.sol` : scénario complet de clé volée et plafond des dégâts, rapports sans
+  valeur, clôture anticipée, borne des frais de bridge, spam de rapports, **le guardian ne change jamais une
+  balance**.
+- `test/WarchestVaultGovernance.t.sol` : cycle complet avec la vraie gouvernance, y compris le vote de clôture
+  (`startCloseRound` refusé tant que `closeVoteAllowed` est faux), `isCloseRequested` → `mustClose` → clôture →
+  nouvelle décision sur un nouveau snapshot.
 - `test/fork/WarchestVaultFork.t.sol` : vrai pool, vrai WETH (proxy), vrai USDG, QuoterV2, dump de 2 000 ETH avant
   la conversion rejeté par le plancher, **dépôt réel sur le SpokePool Across**, rejets de timestamps par le vrai
   SpokePool.
+- Invariants (`VaultInvariant.t.sol`, handler complet : conversions, ordres, rapports, clôtures, retours simulés,
+  réconciliations, révocations, pauses, retraits du distributeur, attaquants) : conservation ETH et USDG (vault +
+  SpokePool + distributeur), jamais vendu sous le plancher, cap / destinataire / une exécution par décision, position
+  cohérente, `cumulativePnl` = Σ retours mesurés − capitaux + retours tardifs, HWM = total distribué et monotone,
+  `distributable ≤ ledger`, **le guardian ne bouge jamais une balance**, aucun fonds chez keeper / attaquant.
+
+Piège de test noté : le compilateur met `block.timestamp` en cache dans une fonction (constant dans une vraie tx),
+ce qui casse les `vm.warp` relatifs ; les tests du vault lisent `vm.getBlockTimestamp()`.

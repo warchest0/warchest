@@ -5,9 +5,13 @@ import { HttpAcrossApi } from "./across/api.js";
 import { RpcChainReader } from "./chain/reader.js";
 import { loadConfig, type Config } from "./config.js";
 import { DryRunExecutor, type Executor } from "./executor.js";
+import { TradingEngine } from "./hyperliquid/engine.js";
+import { HttpHyperliquidExchange } from "./hyperliquid/exchange.js";
 import { HttpHyperliquidInfo } from "./hyperliquid/info.js";
+import { AgentSigner } from "./hyperliquid/signer.js";
 import { Keeper } from "./keeper.js";
-import { defaultAlerts, Logger } from "./log.js";
+import { defaultAlerts, Logger, type Alerts } from "./log.js";
+import { Monitor } from "./monitor.js";
 import { Store } from "./store.js";
 
 const log = new Logger("cli");
@@ -17,6 +21,34 @@ export interface Wiring {
   keeper: Keeper;
   store: Store;
   exec: Executor;
+}
+
+/** Hyperliquid trading engine bound to the agent key (live mode only). */
+export function buildEngine(cfg: Config, hl: HttpHyperliquidInfo, alerts: Alerts): TradingEngine {
+  if (!cfg.hlAgentKey) throw new Error("HL_AGENT_PRIVATE_KEY required");
+  const signer = new AgentSigner(privateKeyToAccount(cfg.hlAgentKey), cfg.hlNetwork === "mainnet");
+  const exchange = new HttpHyperliquidExchange(cfg.hlExchangeUrl, signer, {
+    vaultAddress: cfg.hlTradingAccount.toLowerCase() !== cfg.hlAccount.toLowerCase() ? cfg.hlTradingAccount : undefined,
+    actionTtlMs: cfg.actionTtlMs,
+  });
+  return new TradingEngine(exchange, hl, alerts, {
+    tradingAccount: cfg.hlTradingAccount,
+    killSlippageBps: cfg.killSlippageBps,
+    triggerLimitBps: cfg.triggerLimitBps,
+    deadManMs: cfg.deadManMs,
+    verifyAttempts: 5,
+    verifyDelayMs: 1000,
+  });
+}
+
+/** Independent monitor (read-only unless MONITOR_KILL=1 and the agent key is present). */
+export function buildMonitor(cfg: Config): Monitor {
+  const chain = new RpcChainReader(cfg.rpcUrl, cfg.vault, cfg.governance, cfg.quoter);
+  const hl = new HttpHyperliquidInfo(cfg.hlInfoUrl);
+  const alerts = defaultAlerts(cfg.alertWebhookUrl);
+  const agentAddress = cfg.hlAgentKey ? privateKeyToAccount(cfg.hlAgentKey).address : undefined;
+  const kill = cfg.monitorKill && cfg.mode === "live" ? (reason: string) => buildEngine(cfg, hl, alerts).killSwitch(reason) : undefined;
+  return new Monitor({ chain, hl, alerts, tradingAccount: cfg.hlTradingAccount, hlAccount: cfg.hlAccount, allowedAssets: cfg.allowedAssets, agentAddress, agentExpiryWarnMs: cfg.agentExpiryWarnMs, kill });
 }
 
 /** Builds the keeper from the environment. Live executors are wired by later slices; dry-run is always available. */
@@ -80,6 +112,33 @@ async function main(argv: string[]): Promise<number> {
       store.close();
       return 0;
     }
+    case "monitor": {
+      const cfg = loadConfig();
+      const monitor = buildMonitor(cfg);
+      const once = argv[1] === "once";
+      log.info(`monitor mode=${cfg.mode} kill=${cfg.monitorKill && cfg.mode === "live"} every ${cfg.intervalMs}ms`);
+      let stop = false;
+      process.on("SIGINT", () => (stop = true));
+      process.on("SIGTERM", () => (stop = true));
+      do {
+        try {
+          const findings = await monitor.run();
+          if (once) return findings.some((f) => f.level === "red") ? 2 : 0;
+        } catch (e) {
+          log.error("monitor failed", { error: e instanceof Error ? e.message : String(e) });
+        }
+        await new Promise((r) => setTimeout(r, cfg.intervalMs));
+      } while (!stop);
+      return 0;
+    }
+    case "kill": {
+      const cfg = loadConfig();
+      if (cfg.mode !== "live") throw new Error("kill requires MODE=live (it signs cancel + reduce-only orders with the agent key)");
+      const hl = new HttpHyperliquidInfo(cfg.hlInfoUrl);
+      const r = await buildEngine(cfg, hl, defaultAlerts(cfg.alertWebhookUrl)).killSwitch(argv[1] ?? "manual");
+      log.info(`kill switch done flat=${r.flat}`);
+      return r.flat ? 0 : 2;
+    }
     case "status": {
       const cfg = loadConfig();
       const store = new Store(cfg.dbPath);
@@ -89,7 +148,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      console.log("usage: keeper <once|run|status>");
+      console.log("usage: keeper <once|run|status|monitor [once]|kill [reason]>");
       return cmd === "help" ? 0 : 1;
   }
 }

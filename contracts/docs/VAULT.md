@@ -208,6 +208,9 @@ possibles pour rapatrier et comptabiliser les fonds. `receive()` n'est jamais bl
   l'exécute dans la limite de 20 % de la NAV liquide, une fois.
 - **Keeper honnête mais absent** : rien ne se passe ; les décisions expirent (`maxDecisionAge`) et doivent être
   revotées.
+- **USDG (Paxos)** : token réglementé, upgradable, avec gel d'adresses possible. Un gel du vault bloquerait
+  conversions, ordres et distributions (fail-closed, l'ETH resterait accessible à rien : il n'existe aucune sortie
+  d'ETH hors du swap). À évaluer avec le juridique (`RESEARCH.md` §6) ; Robinhood peut aussi bloquer des adresses.
 - **Distribution** : immuable et désactivée par défaut ; le choix D7 conditionne le déploiement (voir §5).
 
 ## 6. Rôles (S3.1–S3.3)

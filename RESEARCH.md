@@ -160,19 +160,56 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 
 ---
 
-## 4. Coût de gas réel [À MESURER — spike S0]
+## 4. Coût de gas réel — MESURÉ [V] (spike S0.1, 2026-09-27)
 
-Aucun chiffre n'est estimé ici : les mesures seront faites en **fork mainnet 4663** (vrai PoolManager) avec `forge test --gas-report`, puis converties en $ au gas price observé (0,025 gwei, et au pic de 0,511 gwei).
+**Méthode :**
+- Fork Foundry du mainnet 4663 (bloc ~73 519 500), avec le **vrai PoolManager v4** officiel.
+- Mesure par `gasleft()` autour de l'appel, avec des slots froids (`vm.cool`) pour les benchs.
+- Composante L1 (publication des données) interrogée **en live** via `NodeInterface.gasEstimateL1Component` (0x…C8), avec des calldata aléatoires, donc au pire cas de compression.
+- Conversion : ETH = 2 694,68 $ (CoinGecko, même jour). Gas price live = **0,025 gwei**, pic historique = **0,511 gwei**.
+- Code : `research/spikes/` (reproductible : `./setup.sh && forge test -vv`).
 
-| Mesure | Méthode | Résultat |
-|---|---|---|
-| Swap avec hook vs sans hook (achat/vente × exactIn/exactOut) | fork + gas-report | _à remplir_ |
-| Push d'un merkle root de poids par epoch | fork | _à remplir_ |
-| Vote avec preuve merkle (100k holders → profondeur ~17) | fork | _à remplir_ |
-| (Pour comparaison) FIFO/LIFO on-chain, pire cas 500 petits achats | fork | _à remplir_ |
-| (Pour comparaison) écriture de levels par wallet, batch de 1 000 / 10 000 | fork | _à remplir_ |
+### 4.1 Swap avec le hook fee 10 % (pool ETH/TOKEN, via PoolSwapTest)
+| Cas | Gas avec hook | Gas sans hook | Overhead hook | Fee envoyée au vault |
+|---|---|---|---|---|
+| Achat exactIn 1 ETH | 189 144 | 143 954 | **45 190** | 0,1 ETH (10 % exact) |
+| Achat exactOut 1 TOKEN | 187 719 | 142 700 | **45 019** | 10 % de l'ETH payé |
+| Vente exactIn 1 TOKEN | 178 989 | 134 024 | **44 965** | 10 % de l'ETH reçu brut |
+| Vente exactOut 0,5 ETH | 179 692 | 134 544 | **45 148** | 0,05 ETH = 10 % du **net**, soit 9,09 % du brut ⚠️ |
 
-> Note : dans le plan technique, la logique de lots est **off-chain** (indexer). Le coût on-chain pertinent est donc celui des *mises à jour poussées* et des *votes*, pas celui du FIFO. On mesure quand même le FIFO on-chain pour justifier le choix.
+- Composante L1 : ~371–456 gas pour 700–900 octets de calldata, négligeable.
+- **Coût d'un swap avec hook : ~0,013 $ au gas actuel, ~0,26 $ au pic.** L'overhead du hook vaut ~0,003 $ (0,06 $ au pic).
+- L'overhead (~45k) vient surtout du `take` d'ETH natif vers une adresse vault froide.
+- ⚠️ **Sémantique à fixer en S1.3** : en vente exactOut, prélever 10 % du montant *spécifié* revient à prélever 9,09 % du brut. La prod calculera `fee = net × 1000 / 9000` pour garantir 10 % du brut dans les 4 cas.
+
+### 4.2 Gouvernance : merkle root (D2) vs écriture par wallet
+| Opération | Gas | Coût actuel | Coût au pic |
+|---|---|---|---|
+| `submitRoot` (1 root par epoch, quel que soit le nombre de holders) | 44 575 | 0,003 $ | 0,06 $ |
+| `vote` avec preuve, profondeur 17 (≈100k holders) | 87 248 (+371 L1) | 0,006 $ | 0,12 $ |
+| `vote` avec preuve, profondeur 20 (≈1M holders) | 89 770 | 0,006 $ | 0,12 $ |
+| *Rejeté :* `setLevels` 1 000 wallets (première écriture) | 23 171 534 | 1,56 $ | 31,95 $ |
+| *Rejeté :* `setLevels` 10 000 wallets (première écriture) | 233 617 623 | 15,76 $ **par jour** | 322 $ **par jour** |
+| *Rejeté :* `setLevels` 10 000 wallets (mise à jour) | 60 212 529 | 4,08 $/jour | 83 $/jour |
+
+→ **D2 est confirmé par la mesure.** Le merkle root a un coût constant de ~0,003 $ par epoch, alors que l'écriture par wallet coûte de 4 à 322 $ par jour pour 10k holders.
+
+Il faut en plus découper les batches si ArbOS impose un plafond de gas par tx [I : 32M sur Arbitrum, non vérifié pour cette chaîne]. Pour info, le `gasLimit` de bloc lu en live est de 1,1e15.
+
+### 4.3 Lots on-chain (alternative rejetée, mesurée pour justifier le choix off-chain)
+| Opération (wallet avec 500 petits achats) | Gas | Coût actuel | Coût au pic |
+|---|---|---|---|
+| Achat (push d'1 lot) | 67 012 | 0,005 $ | 0,09 $ |
+| Vente LIFO consommant 1 lot | 28 733 | 0,002 $ | 0,04 $ |
+| **Vente LIFO consommant 500 lots (pire cas)** | 2 486 939 | 0,17 $ | 3,42 $ |
+| Vente FIFO consommant 500 lots | 2 406 020 | 0,16 $ | 3,31 $ |
+| Calcul du poids on-chain (scan de 500 lots) | 1 536 959 | 0,10 $ | 2,12 $ |
+
+→ Le LIFO ou le FIFO on-chain restent **techniquement abordables** sur ce L2. Mais :
+1. Ils imposeraient une taxe de gas variable sur chaque transfert, et le token doit rester un ERC20 pur (contrainte non négociable).
+2. Un wallet de spam (des milliers de micro-lots reçus) ferait exploser le coût, ce qui ouvre un vecteur de griefing.
+
+**Le calcul des lots reste donc off-chain (indexer), avec un merkle root on-chain.**
 
 ---
 
@@ -218,8 +255,8 @@ Aucun chiffre n'est estimé ici : les mesures seront faites en **fork mainnet 46
 | Item du plan technique | État |
 |---|---|
 | Hook : direction achat/vente dans tous les états de pool | [À TESTER] fork mainnet + testnet (v4 auto-déployé) |
-| Gas FIFO pire cas | [À MESURER] — sans objet si le calcul reste off-chain (§4) |
-| Batches indexer → gouvernance à l'échelle | [À MESURER] → merkle root (O(1)) |
+| Gas FIFO/LIFO pire cas | **[V] mesuré** : 2,49M gas pour 500 lots (0,17 $ ; 3,42 $ au pic). Reste off-chain (§4.3) |
+| Batches indexer → gouvernance à l'échelle | **[V] mesuré** : merkle root à 44,6k gas par epoch, vote à 87k gas (§4.2) |
 | Agent HL sans retrait enforcé par le protocole | **[V] confirmé**. 2 actions [À TESTER] |
 | Across : coût et délai sur montants trésorerie | **[V] quotes live** (§3.2). Transfert réel [À TESTER] sur mainnet, petits montants |
 | E2E complet sur testnet | Possible **avec bridge simulé** uniquement |

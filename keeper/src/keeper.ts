@@ -135,7 +135,7 @@ export class Keeper {
     if (vault.mustClose && !["closing", "closed_on_hl", "awaiting_return", "report_closed", "finalized"].includes(run.stage)) {
       say(`decision ${id}: mustClose (paused=${vault.paused} closeRequested=${gov.closeRequested} superseded=${gov.decision.id > id})`);
       if (hlPos) run = store.transition(id, "closing", { closeReason: vault.paused ? "vault paused" : gov.closeRequested ? "close voted" : "decision superseded" });
-      else if (run.stage !== "bridging") run = store.transition(id, "closed_on_hl", { closeReason: "mustClose before any position was opened", closedOnHlAt: this.now() });
+      else if (run.stage !== "bridging") run = store.transition(id, "closed_on_hl", { closeReason: "mustClose before any position was opened", closedOnHlAt: this.now(), noTrade: run.stage === "funding" || run.stage === "opening" });
     }
 
     run = await this.step(run, vault, gov, perp, state, hlPos, now, say);
@@ -359,11 +359,13 @@ export class Keeper {
           await this.d.alerts.critical("position re-appeared after close", { decisionId: id });
           return store.transition(id, "closing", { closeReason: "position re-appeared" });
         }
-        const equity = decimalToUsd6(state.accountValue);
+        let equity = decimalToUsd6(state.accountValue);
+        // no trade ever happened: the whole bridged output is still somewhere under the multisig's control
+        if (run.data.noTrade && outputAmount > equity) equity = outputAmount;
         say(`closed on HL: equity ${formatUsd6(equity)} USDC must come back to the vault (multisig)`);
         const r = await exec.returnInstructions({ decisionId: id, equity, coin: perp.name });
         if (!r.done) return run;
-        return store.transition(id, "awaiting_return", { finalEquity: equity.toString(), returnPlanIssuedAt: this.now() });
+        return store.transition(id, "awaiting_return", { finalEquity: equity.toString(), returnPlanIssuedAt: this.now(), returnPlan: r.note });
       }
       case "awaiting_return": {
         const returned = vault.usdgBalance - vault.usdgLedger;

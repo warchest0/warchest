@@ -18,12 +18,14 @@ ROBINHOOD_RPC_URL=https://rpc.mainnet.chain.robinhood.com forge test --match-pat
 | `WarchestToken` | ERC20 pur, supply fixe, **zéro taxe** |
 | `WarchestHook` | Hook v4 : 10 % du brut ETH sur chaque swap, en claims ERC-6909, `flush()` permissionless vers le vault immuable |
 
-## WarchestHook (S1.2)
+## WarchestHook (S1.2 + S1.3) — conception détaillée dans [`docs/HOOK.md`](docs/HOOK.md)
 - Pool unique ETH natif / WAR, initialisable **une seule fois** et **uniquement par l'adresse `initializer`** (immuable), qui doit appeler `PoolManager.initialize` directement.
 - Fee = 10 % du brut ETH dans les 4 cas (achat/vente × exactIn/exactOut), arrondi au wei supérieur en faveur du vault (`|fee − 10 %| < 1 wei`).
 - ETH spécifié (achat exactIn, vente exactOut) → prélevée en `beforeSwap` ; ETH non spécifié → en `afterSwap`. Un remplissage partiel d'un swap prélevé en `beforeSwap` revert (`PartialFill`).
 - Livraison : mint de claims ERC-6909 au hook (aucun appel externe pendant le swap, un vault qui revert ne bloque pas le marché), puis `flush()` → `vault`. `flush()` laisse 1 wei de claims (slot non nul, économise ~17k gas au swap suivant).
 - Aucun owner, aucun setter, rien d'upgradable.
+
+Tests : `test/WarchestHook.t.sol` (unitaires, exactIn), `test/WarchestHookExactOut.t.sol` (exactOut, remplissages partiels, liquidité nulle, multi-ticks, montants extrêmes, fuzz des 4 cas), `test/WarchestHookRouter.t.sol` (`V4Router` v4-periphery, multi-hop, slippage), `test/invariant/` (invariants stateful : conservation des fees, 10 % ± 1 wei, deltas réglés, supply constante), `test/fork/` (vrai PoolManager, UniversalRouter + Permit2, script de déploiement).
 
 ## Déploiement (script prêt pour S1.4)
 ```bash

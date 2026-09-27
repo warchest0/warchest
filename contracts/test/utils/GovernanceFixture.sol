@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {IWarchestDecisionSource} from "../../src/interfaces/IWarchestDecisionSource.sol";
 import {WarchestGovernance} from "../../src/WarchestGovernance.sol";
 import {MerkleHelper} from "./MerkleHelper.sol";
 
@@ -78,7 +79,7 @@ abstract contract GovernanceFixture is Test {
         gov.vote(roundId, option, weights[i], p);
     }
 
-    function _opt(uint256 assetIndex, WarchestGovernance.Direction d) internal pure returns (uint256) {
+    function _opt(uint256 assetIndex, IWarchestDecisionSource.Side d) internal pure returns (uint256) {
         return assetIndex * 2 + uint256(d);
     }
 }

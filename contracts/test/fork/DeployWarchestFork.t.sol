@@ -9,6 +9,8 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {WarchestHook} from "../../src/WarchestHook.sol";
 import {DeployWarchest} from "../../script/DeployWarchest.s.sol";
@@ -31,10 +33,20 @@ contract DeployWarchestForkTest is Test, DeployWarchest {
     }
 
     function _launch() internal returns (Deployment memory d, Config memory cfg) {
-        vm.setEnv("WARCHEST_VAULT", vm.toString(VAULT));
-        vm.setEnv("LP_TOKEN_AMOUNT", vm.toString(uint256(500_000_000 ether)));
-        vm.setEnv("LP_ETH_AMOUNT", vm.toString(uint256(10 ether)));
-        cfg = this.loadConfig();
+        // built in memory: `vm.setEnv` is process-wide and would race with other suites reading the same variables
+        cfg = Config({
+            poolManager: IPoolManager(0x8366a39CC670B4001A1121B8F6A443A643e40951),
+            positionManager: IPositionManager(0x58daec3116aae6D93017bAAea7749052E8a04fA7),
+            permit2: IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+            vault: VAULT,
+            name: "Warchest",
+            symbol: "WAR",
+            supply: 1_000_000_000 ether,
+            lpToken: 500_000_000 ether,
+            lpEth: 10 ether,
+            lpFee: 3000,
+            tickSpacing: 60
+        });
         deployer = makeAddr("deployer");
         vm.deal(deployer, 100 ether);
         // same semantics as `forge script --broadcast`: every call made by the script is sent by `deployer`

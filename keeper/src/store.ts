@@ -31,6 +31,8 @@ export interface RunData {
   capital?: string;
   outputAmount?: string;
   depositId?: string;
+  /** Across fill deadline of the outbound deposit (seconds). */
+  fillDeadline?: number;
   executeTxHash?: string;
   bridgeFilledAt?: number;
   /** Entry attempts already made (cloids are derived from this counter: idempotent across restarts). */

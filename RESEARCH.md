@@ -227,6 +227,14 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 
 Il faut en plus découper les batches si ArbOS impose un plafond de gas par tx [I : 32M sur Arbitrum, non vérifié pour cette chaîne]. Pour info, le `gasLimit` de bloc lu en live est de 1,1e15.
 
+### 4.2 bis Indexer off-chain à l'échelle [V] (S4.4)
+- 100 000 holders et ≈ 600 000 transferts :
+  - snapshot LIFO : 2,2 s ;
+  - arbre merkle : 19,3 s ;
+  - dump publié : 29,4 Mo ;
+  - profondeur des preuves : 17, soit un vote à ≈ 87 k gas (§4.2).
+- Le coût on-chain reste constant (1 root par jour).
+
 ### 4.3 Lots on-chain (alternative rejetée, mesurée pour justifier le choix off-chain)
 | Opération (wallet avec 500 petits achats) | Gas | Coût actuel | Coût au pic |
 |---|---|---|---|

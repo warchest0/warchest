@@ -1,0 +1,39 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1_000_000
+bytecode_hash = "none"
+fs_permissions = [{ access = "read", path = "./" }]
+remappings = [
+  "@uniswap/v4-core/=lib/v4-core/",
+  "@uniswap/v4-periphery/=lib/v4-periphery/",
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "@openzeppelin/uniswap-hooks/=lib/uniswap-hooks/src/",
+  "forge-std/=lib/forge-std/src/",
+  "v4-core/=lib/v4-core/",
+  "solmate/=lib/v4-core/lib/solmate/",
+]
+
+[profile.default.fuzz]
+runs = 1_000
+
+[profile.ci.fuzz]
+runs = 5_000
+
+[profile.default.invariant]
+runs = 256
+depth = 64
+
+[rpc_endpoints]
+robinhood = "${ROBINHOOD_RPC_URL}"
+robinhood_testnet = "${ROBINHOOD_TESTNET_RPC_URL}"
+
+[etherscan]
+robinhood = { key = "blockscout", url = "https://robinhoodchain.blockscout.com/api/", chain = 4663 }
+
+[fmt]
+line_length = 120

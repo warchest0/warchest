@@ -1,0 +1,35 @@
+name: contracts-ci
+
+permissions: {}
+
+on:
+  pull_request:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    name: forge fmt / build / test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: contracts
+    env:
+      FOUNDRY_PROFILE: ci
+      ROBINHOOD_RPC_URL: https://rpc.mainnet.chain.robinhood.com
+      ROBINHOOD_TESTNET_RPC_URL: https://rpc.testnet.chain.robinhood.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - run: forge --version
+      - run: forge fmt --check
+      - run: forge build --sizes
+      - run: forge test -vvv

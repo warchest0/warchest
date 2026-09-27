@@ -3,7 +3,7 @@
 Contrat `contracts/src/WarchestVault.sol`. Il **détient la trésorerie**. Il est séparé de `WarchestGovernance`, qui ne
 détient rien et ne fait que publier des décisions (`IWarchestDecisionSource`). Aucun owner, aucun proxy, aucune
 fonction qui envoie de l'ETH ou de l'USDG vers une adresse arbitraire : les seules sorties de fonds sont le pool de
-conversion (S3.1) et, à partir de S3.2, le SpokePool Across vers un destinataire immuable.
+conversion (S3.1) et le SpokePool Across vers un destinataire **immuable** (S3.2).
 
 ## 1. Garde (S3.1)
 
@@ -61,32 +61,111 @@ Limites connues :
 `nav()` = **USDG en balance + ETH en balance × TWAP × (1 − maxSlippageBps)**, en USDG (6 décimales).
 
 - L'ETH est valorisé au **plancher** qu'une conversion est garantie d'atteindre, jamais au spot : la NAV est
-  pessimiste par construction, donc le plafond de 20 % (S3.2) calculé dessus l'est aussi.
-- Le capital parti sur Hyperliquid **n'est pas** dans `nav()` (voir S3.3).
-- `usdgLedger` = USDG comptabilisé par les opérations du vault (conversions, ordres…). `balance − ledger` = USDG
-  arrivé de l'extérieur (retours de bridge, dons), que S3.3 attribue à la position en cours de clôture.
+  pessimiste par construction, donc le plafond de 20 % calculé dessus l'est aussi.
+- Le capital parti sur Hyperliquid **n'est pas** dans `nav()`. Comme un ordre ne peut être exécuté que sans position
+  ouverte, le plafond est toujours mesuré sur les actifs **liquides** du vault, jamais sur une valeur déclarée.
+- `usdgLedger` = USDG comptabilisé par les opérations du vault (conversions entrantes, ordres sortants).
+  `balance − ledger` = USDG arrivé de l'extérieur (retours de bridge, remboursement d'un dépôt expiré, dons), que
+  S3.3 attribue à la position en cours de clôture. Un ordre ne peut utiliser que l'USDG **comptabilisé**.
 
-## 4. Rôles (S3.1)
+## 4. Exécution d'un ordre (S3.2)
+
+`executeDecision(amount, outputAmount, quoteTimestamp, fillDeadline)`, réservé au keeper, hors pause :
+
+| Contrôle | Règle |
+|---|---|
+| Décision | `governance.currentDecision()`, `id ≠ 0`, **`id > lastExecutedDecisionId`** (chaque id au plus une fois, D8) |
+| Position | aucune position ouverte (**une seule à la fois**) |
+| Fraîcheur | `block.timestamp ≤ governance.getRound(roundId).endsAt + maxDecisionAge` (une décision périmée doit être revotée : tout round quorate frappe un nouvel id) |
+| Cap | `0 < amount ≤ nav() × capBps / 10 000`, et `capBps ≤ MAX_CAP_BPS = 2 000` **vérifié au déploiement** |
+| Ledger | `amount ≤ usdgLedger` |
+| Frais de bridge | `amount × (1 − maxBridgeFeeBps) ≤ outputAmount ≤ amount` (USDG et USDC ont 6 décimales) |
+| Deadline | `fillDeadline > now` ; le SpokePool impose lui-même `quoteTimestamp ∈ [now − 1 h, now]` et `fillDeadline ≤ now + 6 h` |
+
+Puis, dans cet ordre : `lastExecutedDecisionId = id`, position enregistrée (`decisionId, asset, side, capital,
+openedAt, depositId`), `usdgLedger −= amount`, `forceApprove(spokePool, amount)`, **`deposit(bytes32,…)`** sur le
+SpokePool, vérification que le SpokePool a tiré **exactement** `amount` et n'a plus d'allowance, événement
+`OrderExecuted(decisionId, asset, side, capital, outputAmount, depositId, stopLossBps, leverage, takeProfitBps)`.
+
+### Ce qui est figé dans le dépôt Across
+- `depositor = vault` : un dépôt expiré (personne ne le remplit avant `fillDeadline`) est **remboursé au vault** sur
+  Robinhood Chain ; S3.3 le voit comme un retour de capital.
+- `recipient = bridgeRecipient` (compte Hyperliquid, multisig D4), `outputToken = USDC HyperEVM`,
+  `destinationChainId = 999` : **immuables**, aucun setter.
+- `exclusiveRelayer = 0`, `exclusivityParameter = 0` (pas de relayer exclusif, pas de sensibilité aux re-orgs),
+  `message = ""` (le destinataire est un EOA, rien à exécuter).
+- Étape 3 de D5 (HyperEVM → HyperCore) : faite par la clé HyperEVM du multisig, hors vault.
+
+### ABI Across utilisée
+`deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount,
+uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32
+fillDeadline, uint32 exclusivityParameter, bytes message)` — la version courante (non dépréciée) de
+`across-protocol/contracts` `SpokePool.sol`. Vérifié le 2026-09-27 : sélecteur `0xad5425c6` présent dans le bytecode
+de l'implémentation `0x1771…edd8` du proxy `0xD29C85F15DF544bA632C9E25829fd29d767d7978`, `depositQuoteTimeBuffer =
+3 600`, `fillDeadlineBuffer = 21 600`, et **dépôt réel exécuté sur un fork mainnet** (`test_fork_executeDecision_realSpokePool`,
+événement `FundsDeposited` conforme champ par champ). `depositV3(address,…)` existe aussi mais est marqué
+« backward compatibility ». `enabledDepositRoutes` n'existe plus dans cette version (les routes ne sont plus gardées
+on-chain).
+
+### Paramètres de risque publiés
+`stopLossBps`, `leverage`, `takeProfitBps` sont immuables, exposés par `riskParams()` et émis avec chaque ordre. Le
+stop-loss **ne peut pas** être enforcé depuis Robinhood Chain (`RESEARCH.md` §2.5) : le keeper doit poser les
+trigger orders sur Hyperliquid, et un moniteur indépendant doit vérifier qu'il l'a fait.
+
+### `mustClose()`
+Vrai quand une position est ouverte et que : la gouvernance a voté la clôture (`isCloseRequested`, **sans revérifier
+le seuil de profit**), **ou** la gouvernance a frappé une décision plus récente (position **supplantée**, même si la
+nouvelle décision a le même actif et le même sens : on ferme puis on rouvre, c'est plus simple et auditable), **ou**
+le guardian a pausé le vault. Tant que la position n'est pas clôturée (S3.3), aucune nouvelle décision ne peut être
+exécutée.
+
+### Keeper malveillant : ce qu'il peut faire au pire
+Prouvé par `testFuzz_execute_boundsHold`, `test_maliciousKeeper_atMostCapOncePerDecision`, l'invariant
+`invariant_orderBounds` et le fork : quels que soient `amount`, `outputAmount`, `quoteTimestamp`, `fillDeadline`,
+un appel revert **ou** envoie **≤ 20 % de la NAV liquide**, **une seule fois par décision de gouvernance**, vers le
+**SpokePool pour le destinataire immuable**, avec **≤ `maxBridgeFeeBps`** de frais. Il ne peut ni changer le
+destinataire, ni exécuter deux fois, ni ouvrir une seconde position, ni brader l'ETH (§2). Son levier restant est
+**le timing** (exécuter au pire moment du marché) et ce qu'il fait *sur Hyperliquid* avec l'agent (voir
+`RESEARCH.md` §2.3), hors de portée du vault.
+
+## 5. Rôles (S3.1–S3.2)
 
 | Rôle | Peut | Ne peut jamais |
 |---|---|---|
-| `keeper` (EOA bot, remplaçable) | `convertEthToUsdg` sous les bornes ci-dessus | envoyer des fonds ailleurs, changer un paramètre |
-| `guardian` (multisig, D9) | `setPaused`, `setKeeper`, transfert du rôle en deux étapes | déplacer des fonds, changer le pool, les bornes, le destinataire |
+| `keeper` (EOA bot, remplaçable) | `convertEthToUsdg`, `executeDecision` sous les bornes ci-dessus | envoyer des fonds ailleurs, changer un paramètre, rejouer une décision |
+| `guardian` (multisig, D9) | `setPaused`, `setKeeper`, transfert du rôle en deux étapes | déplacer des fonds, changer le pool, le SpokePool, le destinataire, les caps |
+| gouvernance | fournir la décision courante et la demande de clôture | appeler le vault (elle ne fait que le lire via `closeVoteAllowed`, S3.3) |
 | n'importe qui | envoyer de l'ETH | — |
 
 Tous les paramètres sont `immutable`. La pause bloque les actions du keeper, jamais `receive()`.
 
-## 5. Gas mesuré (fork mainnet, 2026-09-27)
+## 6. Mocks livrés
+- `src/mocks/MockAcrossSpokePool.sol` : reproduit les contrôles du vrai `deposit` (fenêtre de `quoteTimestamp`,
+  buffer de `fillDeadline`, règle d'exclusivité, tirage ERC20, `depositId`, événement) et garde les tokens ;
+  `release()` permissionless simule un fill ou un remboursement (**testnet uniquement**, D6). Compilé en `via_ir`
+  comme le vrai SpokePool (ABI à 12 paramètres).
+- `test/mocks/MockUniswapV3Pool.sol` (TWAP et prix d'exécution découplés), `MockWETH`, `MockUSDG`,
+  `MockDecisionSource`.
+
+## 7. Gas mesuré (fork mainnet, 2026-09-27)
 
 | Fonction | Gas |
 |---|---|
-| `convertEthToUsdg(10 ETH)` à froid | 304 012 |
+| `convertEthToUsdg(10 ETH)` à froid | 296 974 – 304 012 |
+| `executeDecision` (vrai SpokePool) à froid | 322 795 |
 
-## 6. Tests
+## 8. Tests
 - `test/WarchestVaultConversion.t.sol` : construction, garde, conversion (chemins nominaux, tous les reverts, sandwich,
   fill partiel, oracle trop court), callback, maths de l'oracle (arrondi, branche haute), NAV, keeper malveillant
   (fuzz), rôles.
-- `test/invariant/VaultInvariant.t.sol` : conservation de l'ETH, ledger = balance, jamais vendu sous le plancher,
-  aucun fonds chez le keeper / guardian / attaquant.
+- `test/WarchestVaultExecute.t.sol` : bornes du constructeur (cap dur 20 %), chemin nominal, champs du dépôt Across,
+  tous les reverts (vault et SpokePool), cap sur la NAV avec ETH au plancher, ledger, `mustClose`, fuzz des bornes,
+  keeper malveillant.
+- `test/WarchestVaultGovernance.t.sol` : **vraie `WarchestGovernance`** (snapshot, votes, finalisation) → exécution une
+  seule fois, fallback de quorum (D8) sans réouverture, décision supplantée, péremption via `getRound().endsAt`.
+- `test/invariant/VaultInvariant.t.sol` : conservation ETH et USDG (vault + SpokePool), ledger = balance, jamais vendu
+  sous le plancher, cap et destinataire respectés à chaque ordre, une exécution par décision, position cohérente,
+  aucun fonds chez keeper / guardian / attaquant / destinataire.
 - `test/fork/WarchestVaultFork.t.sol` : vrai pool, vrai WETH (proxy), vrai USDG, QuoterV2, dump de 2 000 ETH avant
-  la conversion rejeté par le plancher.
+  la conversion rejeté par le plancher, **dépôt réel sur le SpokePool Across**, rejets de timestamps par le vrai
+  SpokePool.

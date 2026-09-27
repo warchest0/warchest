@@ -211,6 +211,8 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 
 **Vault (S3.1, 2026-09-27, fork mainnet, `test/fork/WarchestVaultFork.t.sol`) [V].** `convertEthToUsdg(10 ETH)` à froid (`vm.cool` sur vault, pool v3, WETH, USDG), swap direct contre le pool v3 0,01 % avec lecture de la TWAP 30 min : **304 012 gas** (≈ 0,02 $ au gas actuel, 0,42 $ au pic). La sortie est identique à la quote du QuoterV2 officiel pour le même bloc.
 
+**Vault (S3.2, 2026-09-27, fork mainnet, même test) [V].** `executeDecision` (lecture de la décision, cap 20 % de la NAV avec TWAP, `deposit(bytes32,…)` sur le **vrai SpokePool Across** `0xD29C…7978` vers HyperEVM 999) à froid : **322 795 gas** (≈ 0,02 $ au gas actuel, 0,44 $ au pic). L'événement `FundsDeposited` du SpokePool porte bien le recipient immuable et `depositId = numberOfDeposits` (372 448 au bloc 73 587 135).
+
 ### 4.2 Gouvernance : merkle root (D2) vs écriture par wallet
 | Opération | Gas | Coût actuel | Coût au pic |
 |---|---|---|---|

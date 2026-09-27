@@ -11,8 +11,11 @@ fs_permissions = [{ access = "read", path = "./" }]
 # The local PoolManager (compiled only for tests, via v4-core `Deployers`) exceeds EIP-170 without via_ir.
 # Compile it with v4-core's own settings; production code (src/) keeps the default profile.
 additional_compiler_profiles = [{ name = "v4core", via_ir = true, optimizer_runs = 44_444_444 }]
+# The Across SpokePool ABI (12-parameter `deposit`) needs via_ir, exactly like the real SpokePool build; only the
+# testnet mock is affected, WarchestVault itself compiles with the default pipeline.
 compilation_restrictions = [
   { paths = "lib/v4-core/src/PoolManager.sol", via_ir = true, optimizer_runs = 44_444_444 },
+  { paths = "src/mocks/MockAcrossSpokePool.sol", via_ir = true },
 ]
 remappings = [
   "@uniswap/v4-core/=lib/v4-core/",

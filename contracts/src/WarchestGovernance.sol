@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {IWarchestDecisionSource, IWarchestVaultView} from "./interfaces/IWarchestDecisionSource.sol";
 
 /// @title WarchestGovernance
 /// @notice Level-weighted governance for the WARCHEST treasury. Holds NO funds and never talks to the vault's money:
@@ -11,16 +12,10 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 ///      computed off-chain by the indexer from on-chain transfer history (DECISIONS.md D1, D2). Only the merkle root
 ///      is stored on-chain; voters prove their own weight. A root becomes usable only after a challenge window during
 ///      which the guardian can revoke it.
-contract WarchestGovernance {
+contract WarchestGovernance is IWarchestDecisionSource {
     // ---------------------------------------------------------------------------------------------------------------
     // Types
     // ---------------------------------------------------------------------------------------------------------------
-
-    /// @notice Position side on Hyperliquid. Leverage is fixed off-chain in advance and is NOT voted on.
-    enum Direction {
-        Long,
-        Short
-    }
 
     enum RoundKind {
         /// Choose (asset, direction) among the eligible assets.
@@ -117,6 +112,15 @@ contract WarchestGovernance {
     mapping(uint256 roundId => mapping(address account => bool)) public hasVoted;
 
     // ---------------------------------------------------------------------------------------------------------------
+    // Decisions
+    // ---------------------------------------------------------------------------------------------------------------
+
+    Decision internal _currentDecision;
+    mapping(uint256 decisionId => bool) internal _closeRequested;
+    /// @notice WarchestVault, read only to gate close rounds. Set once by the guardian.
+    address public vault;
+
+    // ---------------------------------------------------------------------------------------------------------------
     // Events & errors
     // ---------------------------------------------------------------------------------------------------------------
 
@@ -129,6 +133,12 @@ contract WarchestGovernance {
     event Paused(bool paused);
     event RoundStarted(uint256 indexed roundId, RoundKind kind, uint64 epoch, uint64 endsAt, uint256 targetDecisionId);
     event VoteCast(uint256 indexed roundId, address indexed voter, uint256 option, uint256 weight);
+    event RoundFinalized(uint256 indexed roundId, bool quorate, uint256 winningOption, uint256 winningWeight);
+    event DecisionMade(uint256 indexed decisionId, uint32 asset, Side side, uint256 indexed roundId);
+    /// @notice Quorum missed or tie: the previous decision (possibly none) stands unchanged (D8).
+    event FallbackToPreviousDecision(uint256 indexed roundId, uint256 indexed standingDecisionId);
+    event CloseRequested(uint256 indexed decisionId, uint256 indexed roundId);
+    event VaultSet(address vault);
 
     error ZeroAddress();
     error NotGuardian();
@@ -150,6 +160,12 @@ contract WarchestGovernance {
     error InvalidOption(uint256 option);
     error ZeroWeight();
     error InvalidProof();
+    error VaultAlreadySet();
+    error RoundNotEnded(uint256 roundId);
+    error AlreadyFinalized(uint256 roundId);
+    error NoDecision();
+    error CloseAlreadyRequested(uint256 decisionId);
+    error CloseVoteNotAllowed(uint256 decisionId);
 
     // ---------------------------------------------------------------------------------------------------------------
     // Construction
@@ -214,6 +230,14 @@ contract WarchestGovernance {
         }
         _eligibleAssets = assets;
         emit EligibleAssetsSet(assets);
+    }
+
+    /// @notice One-time wiring to the vault (only used to gate close rounds; governance never moves funds).
+    function setVault(address vault_) external onlyGuardian {
+        if (vault_ == address(0)) revert ZeroAddress();
+        if (vault != address(0)) revert VaultAlreadySet();
+        vault = vault_;
+        emit VaultSet(vault_);
     }
 
     function eligibleAssets() external view returns (uint32[] memory) {
@@ -285,7 +309,7 @@ contract WarchestGovernance {
     }
 
     /// @notice Casts the caller's full snapshot weight for `option`.
-    /// @param option Direction round: `assetIndex * 2 + uint(Direction)` where `assetIndex` indexes `roundAssets`.
+    /// @param option Direction round: `assetIndex * 2 + uint(Side)` where `assetIndex` indexes `roundAssets`.
     ///               Close round: 0 = keep the position, 1 = close it.
     /// @param weight The caller's weight in the round's snapshot tree.
     /// @param proof Merkle proof of `leaf(epoch, msg.sender, weight)`.
@@ -305,6 +329,59 @@ contract WarchestGovernance {
         emit VoteCast(roundId, msg.sender, option, weight);
     }
 
+    /// @notice Opens a yes/no round on voluntarily closing the position of the current decision. Permissionless, but
+    ///         only when the vault reports that a position is open for it and its profit threshold is reached.
+    function startCloseRound(uint64 epoch) external whenNotPaused returns (uint256 roundId) {
+        uint256 decisionId = _currentDecision.id;
+        if (decisionId == 0) revert NoDecision();
+        if (_closeRequested[decisionId]) revert CloseAlreadyRequested(decisionId);
+        if (vault == address(0) || !IWarchestVaultView(vault).closeVoteAllowed(decisionId)) {
+            revert CloseVoteNotAllowed(decisionId);
+        }
+        roundId = _startRound(RoundKind.Close, epoch, decisionId);
+    }
+
+    /// @notice Closes the tally of an ended round. Permissionless.
+    /// @dev Direction round: a NEW decision is minted only if quorum is reached and the top option is unique;
+    ///      otherwise the previous decision stands unchanged (same id) — DECISIONS.md D8.
+    ///      Close round: the close is requested only if quorum is reached and "close" strictly beats "keep".
+    function finalize(uint256 roundId) external whenNotPaused {
+        Round storage r = _rounds[roundId];
+        if (r.startsAt == 0) revert RoundNotOpen(roundId);
+        if (r.finalized) revert AlreadyFinalized(roundId);
+        if (block.timestamp < r.endsAt) revert RoundNotEnded(roundId);
+
+        r.finalized = true;
+        activeRound[r.kind] = 0;
+
+        bool quorate = r.totalVoted * BPS >= uint256(quorumBps) * _roots[r.epoch].totalWeight;
+        (uint256 winner, uint256 winnerWeight, bool unique) = _leader(roundId);
+        emit RoundFinalized(roundId, quorate, winner, winnerWeight);
+
+        if (r.kind == RoundKind.Direction) {
+            if (quorate && unique && winnerWeight > 0) {
+                (uint32 asset, Side side) = decodeOption(roundId, winner);
+                uint256 id = _currentDecision.id + 1;
+                _currentDecision =
+                    Decision({id: id, asset: asset, side: side, roundId: roundId, decidedAt: uint64(block.timestamp)});
+                emit DecisionMade(id, asset, side, roundId);
+            } else {
+                emit FallbackToPreviousDecision(roundId, _currentDecision.id);
+            }
+        } else if (quorate && unique && winner == 1) {
+            _closeRequested[r.targetDecisionId] = true;
+            emit CloseRequested(r.targetDecisionId, roundId);
+        }
+    }
+
+    function currentDecision() external view returns (Decision memory) {
+        return _currentDecision;
+    }
+
+    function isCloseRequested(uint256 decisionId) external view returns (bool) {
+        return _closeRequested[decisionId];
+    }
+
     function getRound(uint256 roundId) external view returns (Round memory) {
         return _rounds[roundId];
     }
@@ -318,11 +395,25 @@ contract WarchestGovernance {
     }
 
     /// @notice Decodes a direction-round option into its Hyperliquid asset index and side.
-    function decodeOption(uint256 roundId, uint256 option) public view returns (uint32 asset, Direction direction) {
+    function decodeOption(uint256 roundId, uint256 option) public view returns (uint32 asset, Side side) {
         if (_rounds[roundId].kind != RoundKind.Direction || option >= optionCount(roundId)) {
             revert InvalidOption(option);
         }
-        return (_roundAssets[roundId][option / 2], Direction(option % 2));
+        return (_roundAssets[roundId][option / 2], Side(option % 2));
+    }
+
+    /// @dev Highest-weight option, its weight, and whether no other option has the same weight.
+    function _leader(uint256 roundId) internal view returns (uint256 winner, uint256 best, bool unique) {
+        uint256 n = optionCount(roundId);
+        unique = true;
+        for (uint256 o; o < n; ++o) {
+            uint256 w = tally[roundId][o];
+            if (w > best) {
+                (winner, best, unique) = (o, w, true);
+            } else if (w == best) {
+                unique = false;
+            }
+        }
     }
 
     function _startRound(RoundKind kind, uint64 epoch, uint256 targetDecisionId) internal returns (uint256 roundId) {

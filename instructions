@@ -1,0 +1,44 @@
+Contexte : je construis WARCHEST, un token sur Robinhood Chain (L2 style Arbitrum) 
+avec un hook Uniswap v4 custom + un système de gouvernance pondéré par ancienneté 
+de holding + un keeper qui trade sur Hyperliquid. Le design complet est dans 
+warchest-technical-plan.pdf (joint).
+
+RÈGLE NUMÉRO UN : avant d'écrire une seule ligne de code, fais la recherche 
+nécessaire et écris-la dans un fichier RESEARCH.md. Je veux que tu vérifies, 
+pas que tu supposes :
+- l'ABI exacte et le comportement des hooks Uniswap v4 sur Robinhood Chain
+- le modèle de permissions des wallets d'agent Hyperliquid (confirme que 
+  "trading only, no withdrawal" est bien appliqué par Hyperliquid lui-même, 
+  pas juste une convention côté client)
+- le comportement réel du bridge Across entre Robinhood Chain et Hyperliquid 
+  (délai, coût, sur des montants réalistes de trésorerie, pas juste des tests 
+  triviaux)
+- coût de gas réel mesuré (pas estimé) pour le hook et pour la logique FIFO 
+  de lots par wallet
+
+Ne code rien tant que RESEARCH.md n'est pas rempli sur ces points.
+
+Ordre de build (une branche git par étape, dans cet ordre strict) :
+1. feat/token-hook — WarchestToken.sol (ERC20 standard, zéro logique de taxe 
+   dedans) + WarchestHook.sol (hook v4, prend 10% au swap selon direction 
+   achat/vente, envoie au vault)
+2. feat/governance-levels — WarchestGovernance.sol (levels 1 à 10 par wallet, 
+   vote pondéré level x supply, quorum avec fallback sur décision précédente) 
+   — teste-le complètement avec un vault mocké, ne dépend de rien d'autre
+3. feat/treasury-vault — WarchestVault.sol (exécute uniquement des ordres 
+   pré-validés par la gouvernance, plafond dur 20% de trésorerie par trade, 
+   stop-loss automatique) — teste avec un keeper mocké
+4. feat/indexer — service off-chain qui calcule les levels et l'état FIFO 
+   des lots à partir de l'historique on-chain, pousse les mises à jour à 
+   WarchestGovernance
+5. feat/keeper-hyperliquid — le plus complexe et le plus risqué, à faire 
+   en dernier : lit les votes, bridge via Across, ouvre/ferme les positions 
+   sur Hyperliquid via wallet d'agent scope trading-only
+
+Contraintes non négociables :
+- WarchestGovernance et WarchestVault sont deux contrats séparés, jamais fusionnés
+- Aucune taxe sur le transfer du token lui-même, uniquement via le hook
+- Le wallet d'agent Hyperliquid ne doit jamais avoir de droit de retrait
+- Test complet du cycle de bout en bout sur testnet avant tout capital réel
+
+Commence par RESEARCH.md.

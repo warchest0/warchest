@@ -1,17 +1,17 @@
-# Whitepaper public — corrections à intégrer (S0.4)
+# Public whitepaper — corrections to incorporate (S0.4)
 
-> À appliquer à `warchest-public-whitepaper.pdf` lors de sa prochaine régénération. Sources : `RESEARCH.md`, `DECISIONS.md`.
+> To be applied to `warchest-public-whitepaper.pdf` at its next regeneration. Sources: `RESEARCH.md`, `DECISIONS.md`.
 
-| § | Texte actuel | Correction | Raison |
+| § | Current text | Correction | Reason |
 |---|---|---|---|
-| 2.1 | « a pattern already validated in live production on Robinhood Chain by comparable projects » | « Plusieurs hooks de taxe Uniswap v4 sont déjà déployés sur Robinhood Chain et référencés dans la hooklist Uniswap. Le hook WARCHEST sera audité avant le mainnet. » | La référence Stakd n'est pas équivalente (max 6 %, non audité). Il ne faut pas laisser entendre qu'il existe une validation d'audit. |
-| 2.1 | (absent) | Préciser que la fee est **toujours prélevée en ETH**, et qu'elle vaut 10 % du montant ETH brut du swap. | D3 |
-| 2.2 | « the most recently acquired tokens are considered sold first » | Conserver ce texte et nommer le mécanisme (**LIFO**). Préciser qu'un transfert entre wallets compte comme une vente pour l'émetteur. | D1 |
-| 2.3 | « Voting power equals holding size multiplied by level » | « Le poids de vote est la somme, sur chaque lot détenu, de montant × level de ce lot, figée au snapshot quotidien. » | D1, D2 : chaque lot a son propre level, et le snapshot empêche le double vote. |
-| 3.1 | « Positions close either automatically, through non-negotiable stop-loss rules » | Préciser que les stop-loss sont des **ordres trigger posés sur Hyperliquid** au moment de l'ouverture, et qu'ils restent actifs même si le keeper est hors ligne. | Le vault sur Robinhood Chain ne peut pas enforcer un stop sur Hyperliquid. |
-| 3.1 | « Realized profit is distributed automatically, in proportion to each holder's level » | En attente de l'avis juridique (D7). Si la distribution est maintenue : « au prorata du poids (montant × level) », uniquement au-dessus du high-water mark. | Cohérence avec le vote, et risque réglementaire. |
-| 4 | « trading-only agent wallet with no withdrawal rights » | Ajouter que le compte Hyperliquid est détenu par un **multisig**, et que seul le multisig peut retirer les fonds. | D4 : c'est le vrai modèle de confiance. |
-| 4 | (absent) | Préciser que les fonds transitent par le stablecoin **USDG** sur Robinhood Chain, puis par l'USDC sur Hyperliquid, via le bridge Across, avec des frais d'environ 6 bp. | RESEARCH §3 |
-| 5 | Roadmap | Ajouter l'audit externe et l'avis juridique avant le mainnet. Délai réaliste : 14 à 16 semaines. | PLAN.md |
+| 2.1 | "a pattern already validated in live production on Robinhood Chain by comparable projects" | "Several Uniswap v4 tax hooks are already deployed on Robinhood Chain and listed in the Uniswap hooklist. The WARCHEST hook will be audited before mainnet." | The Stakd reference is not equivalent (max 6%, not audited). We must not imply that any audit validation exists. |
+| 2.1 | (missing) | Specify that the fee is **always taken in ETH**, and that it equals 10% of the gross ETH amount of the swap. | D3 |
+| 2.2 | "the most recently acquired tokens are considered sold first" | Keep this text and name the mechanism (**LIFO**). Specify that a transfer between wallets counts as a sale for the sender. | D1 |
+| 2.3 | "Voting power equals holding size multiplied by level" | "Voting weight is the sum, over each lot held, of amount × level of that lot, frozen at the daily snapshot." | D1, D2: each lot has its own level, and the snapshot prevents double voting. |
+| 3.1 | "Positions close either automatically, through non-negotiable stop-loss rules" | Specify that stop-losses are **trigger orders placed on Hyperliquid** at the time of opening, and that they remain active even if the keeper is offline. | The vault on Robinhood Chain cannot enforce a stop on Hyperliquid. |
+| 3.1 | "Realized profit is distributed automatically, in proportion to each holder's level" | Pending legal advice (D7). If distribution is kept: "pro rata to weight (amount × level)", only above the high-water mark. | Consistency with the vote, and regulatory risk. |
+| 4 | "trading-only agent wallet with no withdrawal rights" | Add that the Hyperliquid account is held by a **multisig**, and that only the multisig can withdraw the funds. | D4: this is the real trust model. |
+| 4 | (missing) | Specify that funds transit through the **USDG** stablecoin on Robinhood Chain, then through USDC on Hyperliquid, via the Across bridge, with fees of about 6 bp. | RESEARCH §3 |
+| 5 | Roadmap | Add the external audit and the legal advice before mainnet. Realistic timeline: 14 to 16 weeks. | PLAN.md |
 
-Rappel des CGU Robinhood Chain : **aucun usage de la marque Robinhood** dans la communication liée à l'émission du token.
+Reminder of the Robinhood Chain Terms of Service: **no use of the Robinhood brand** in communications related to the token issuance.

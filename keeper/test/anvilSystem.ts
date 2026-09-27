@@ -99,6 +99,8 @@ export interface AnvilSystem {
   fundAndConvert(eth: bigint): Promise<void>;
   /** Sends USDG from the mock SpokePool to the vault (simulates a bridge return / refund). */
   returnUsdg(amount: bigint): Promise<void>;
+  /** Guardian (deployer) pauses / unpauses the vault. */
+  pause(paused: boolean): Promise<void>;
   stop(): void;
 }
 
@@ -204,5 +206,9 @@ export async function startAnvilSystem(opts: { chainId?: number; risk?: { stopLo
     await write(deployer, spoke, MOCK_ABI, "release", [usdg, vault, amount]);
   };
 
-  return { rpc, pub, governance, vault, weth, usdg, pool, spoke, keeper: keeperAcc.address, chainId, warp, now, decide, fundAndConvert, returnUsdg, stop: () => anvil.kill() };
+  const pause = async (paused: boolean) => {
+    await write(deployer, vault, VAULT_EXTRA_ABI, "setPaused", [paused]);
+  };
+
+  return { rpc, pub, governance, vault, weth, usdg, pool, spoke, keeper: keeperAcc.address, chainId, warp, now, decide, fundAndConvert, returnUsdg, pause, stop: () => anvil.kill() };
 }

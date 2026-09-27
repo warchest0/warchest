@@ -5,6 +5,7 @@
  */
 import type { Address } from "viem";
 import type { AcrossApi } from "./across/api.js";
+import { classifyDeposit, outboundRoute } from "./across/bridge.js";
 import type { ChainReader } from "./chain/reader.js";
 import type { Config } from "./config.js";
 import type { Executor } from "./executor.js";
@@ -163,12 +164,7 @@ export class Keeper {
       say(`idle: ${blocked.reason}`);
       return "idle";
     }
-    const route = {
-      inputToken: vault.usdg,
-      outputToken: vault.bridgeOutputToken,
-      originChainId: this.d.cfg.chainId,
-      destinationChainId: vault.destinationChainId,
-    };
+    const route = outboundRoute(vault, this.d.cfg.chainId);
     const limits = await this.d.across.limits(route);
     const amount = bridgeAmount(vault, limits);
     if (amount === 0n) {
@@ -192,6 +188,7 @@ export class Keeper {
         capital: plan.amount.toString(),
         outputAmount: plan.outputAmount.toString(),
         depositId: (r.depositId ?? plan.expectedDepositId).toString(),
+        fillDeadline: plan.fillDeadline,
         executeTxHash: r.txHash,
       });
       await this.d.alerts.info("executeDecision sent", { decisionId: plan.decisionId, amount: plan.amount, txHash: r.txHash });
@@ -243,11 +240,16 @@ export class Keeper {
     switch (run.stage) {
       case "bridging": {
         const ds = await across.depositStatus(cfg.chainId, BigInt(run.data.depositId ?? vault.position.depositId));
-        say(`bridging: Across deposit ${run.data.depositId} status=${ds.status}`);
-        if (ds.status === "filled") return store.transition(id, "funding", { bridgeFilledAt: this.now() });
-        if (ds.status === "refunded" || (ds.status === "expired" && vault.usdgBalance > vault.usdgLedger)) {
-          await this.d.alerts.warning("Across deposit refunded to the vault: closing the decision without trading", { decisionId: id });
+        const res = classifyDeposit(ds, vault, vault.position.capital, run.data.fillDeadline);
+        say(`bridging: Across deposit ${run.data.depositId} api=${ds.status} → ${res.state}${"reason" in res ? ` (${res.reason})` : ""}`);
+        if (res.state === "filled") return store.transition(id, "funding", { bridgeFilledAt: this.now() });
+        if (res.state === "refunded") {
+          await this.d.alerts.warning("Across deposit refunded to the vault: closing the decision without trading", { decisionId: id, reason: res.reason });
           return store.transition(id, "awaiting_return", { closeReason: "bridge refunded", finalEquity: run.data.capital, closedOnHlAt: this.now() });
+        }
+        if (res.state === "expired" && !run.data.notes?.includes("expired")) {
+          await this.d.alerts.warning("Across deposit expired: waiting for the SpokePool refund", { decisionId: id, reason: res.reason });
+          run = store.patch(id, { notes: [...(run.data.notes ?? []), "expired"] });
         }
         // the multisig may have moved the funds before the API caught up
         if (decimalToUsd6(state.withdrawable) >= (outputAmount * FUNDING_TOLERANCE_BPS) / BPS && outputAmount > 0n) {

@@ -193,6 +193,16 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 - L'overhead (~45k) vient surtout du `take` d'ETH natif vers une adresse vault froide.
 - ⚠️ **Sémantique à fixer en S1.3** : en vente exactOut, prélever 10 % du montant *spécifié* revient à prélever 9,09 % du brut. La prod calculera `fee = net × 1000 / 9000` pour garantir 10 % du brut dans les 4 cas.
 
+**Re-mesure avec le hook de production `WarchestHook` (S1.2, 2026-09-27, fork mainnet, `contracts/test/fork/`) [V].** Différence de méthode : chaque mesure démarre d'un état froid (`vm.cool` sur PoolManager, hook, token, router, vault) et le hook détient déjà des claims (état stationnaire après un `flush()`), ce qui reproduit une transaction réelle. Les fees sont mintées en **claims ERC-6909** au hook (pas de `take` natif pendant le swap), puis `flush()` permissionless vers le vault.
+
+| Cas | Gas avec hook | Gas sans hook | Overhead hook |
+|---|---|---|---|
+| Achat exactIn 1 ETH | 155 059 | 109 506 | **45 553** |
+| Vente exactIn 1 TOKEN | 148 008 | 117 359 | **30 649** |
+| `flush()` (burn des claims + `take` ETH vers le vault, amorti sur N swaps) | 78 351 | — | — |
+
+→ L'overhead par swap est au plus équivalent au spike (achat) et inférieur de ~14k (vente), sans exposer le marché à un vault qui revert. Les cas exactOut seront mesurés en S1.3.
+
 ### 4.2 Gouvernance : merkle root (D2) vs écriture par wallet
 | Opération | Gas | Coût actuel | Coût au pic |
 |---|---|---|---|

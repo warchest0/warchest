@@ -36,3 +36,6 @@ Le script mine un salt (`script/utils/HookMiner.sol`) et déploie via le CREATE2
 
 ## Lancement complet (S1.4)
 `script/DeployWarchest.s.sol` : token, hook, initialisation du pool et liquidité full-range, en un seul script (testnet et mainnet). Runbook : `docs/DEPLOY.md`. Dossiers : `docs/HOOKLIST.md`, `docs/AUDIT-REQUEST.md`.
+
+## Gouvernance (branche 2)
+`src/WarchestGovernance.sol` + `src/interfaces/IWarchestDecisionSource.sol`. Voir `docs/GOVERNANCE.md`.

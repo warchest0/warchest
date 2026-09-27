@@ -32,6 +32,7 @@ abstract contract VaultFixture is Test {
     uint16 constant TAKE_PROFIT_BPS = 1_000;
     uint256 constant DEST_CHAIN = 999;
     uint32 constant FILL_WINDOW = 4 hours;
+    uint64 constant REPORT_WINDOW = 6 hours;
 
     uint32 constant BTC = 0;
     uint32 constant ETH_ASSET = 1;
@@ -41,6 +42,7 @@ abstract contract VaultFixture is Test {
     address attacker = makeAddr("attacker");
     address hlAccount = makeAddr("hlAccount");
     address usdcHyperEvm = makeAddr("usdcHyperEvm");
+    address distributor = makeAddr("distributor");
 
     MockWETH weth;
     MockUSDG usdg;
@@ -80,7 +82,8 @@ abstract contract VaultFixture is Test {
             maxDecisionAge: MAX_DECISION_AGE,
             stopLossBps: STOP_LOSS_BPS,
             leverage: LEVERAGE,
-            takeProfitBps: TAKE_PROFIT_BPS
+            takeProfitBps: TAKE_PROFIT_BPS,
+            reportChallengeWindow: REPORT_WINDOW
         });
     }
 
@@ -102,7 +105,7 @@ abstract contract VaultFixture is Test {
         WarchestVault.ConversionParams memory cp
     ) internal returns (WarchestVault) {
         return new WarchestVault(
-            guardian_, keeper_, IWarchestDecisionSource(address(gov)), venue, _bridge(), cp, _orderParams()
+            guardian_, keeper_, IWarchestDecisionSource(address(gov)), distributor, venue, _bridge(), cp, _orderParams()
         );
     }
 
@@ -130,8 +133,8 @@ abstract contract VaultFixture is Test {
         vault.executeDecision(
             amount,
             amount * (BPS - MAX_BRIDGE_FEE_BPS) / BPS,
-            uint32(block.timestamp),
-            uint32(block.timestamp) + FILL_WINDOW
+            uint32(vm.getBlockTimestamp()),
+            uint32(vm.getBlockTimestamp()) + FILL_WINDOW
         );
     }
 

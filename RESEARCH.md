@@ -153,7 +153,18 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 - Ne pas utiliser le bridge canonique Orbit pour les retours : il impose **7 jours** de challenge.
 
 ### 3.3 Conséquences sur le design [I]
-1. Le hook encaisse de l'ETH → le vault doit **swapper ETH → USDG** sur Robinhood Chain avant le bridge. La liquidité ETH/USDG du pool est à mesurer [À MESURER].
+1. Le hook encaisse de l'ETH, donc le vault doit **swapper ETH → USDG** sur Robinhood Chain avant le bridge. **[V] Liquidité mesurée** (quotes read-only, bloc ~73,52M, 2026-09-27) :
+
+   | ETH vendus | USDG reçus | Impact | Venue |
+   |---|---|---|---|
+   | 1 | 2 693,04 | réf. | Uniswap v3 0,01 % `0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca` (TVL ≈ 19,6 M$) |
+   | 10 | 26 928,34 | −0,01 % | v3 0,01 % |
+   | 100 | 269 079,16 | −0,08 % | v3 0,01 % |
+   | 500 | 1 343 266,66 | −0,24 % | pool v4 ETH natif (id `0xbac3aa3b…e551`, hook `0x06a8…6080`) |
+
+   - Pour tester des quotes v3 : QuoterV2 `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7`.
+   - L'agrégateur LiFi est légèrement moins bon que les pools directs.
+   - → Les conversions de taille trésorerie coûtent < 0,5 %. Le vault devra quand même borner le slippage (`minOut`) et découper les gros montants.
 2. Le vault peut enforcer on-chain : montant ≤ 20 %, **recipient immuable**, appel direct au SpokePool Across. C'est une garantie réelle.
 3. Le retour vers Robinhood exige une signature maître (`withdraw3` ou transfert EVM) : **il ne peut pas être automatisé par l'agent**. C'est voulu, et c'est une sécurité.
 4. Pour l'E2E sur testnet, le bridge est **simulé**. La validation réelle du bridge se fera sur mainnet avec des petits montants, puis des montants de taille trésorerie.

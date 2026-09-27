@@ -209,6 +209,8 @@ Sources : https://hyperliquid.gitbook.io/hyperliquid-docs (signing, exchange-end
 
 → L'overhead par swap est équivalent au spike à l'achat et inférieur de 14–20k à la vente, sans exposer le marché à un vault qui revert. Via l'**UniversalRouter officiel** `0x8876…0904` (+ Permit2 pour l'entrée en token), un swap avec le hook coûte 150 634 (vente exactIn) à 152 933 (achat exactIn) gas, mesurés dans `test/fork/WarchestHookRouterFork.t.sol`.
 
+**Vault (S3.1, 2026-09-27, fork mainnet, `test/fork/WarchestVaultFork.t.sol`) [V].** `convertEthToUsdg(10 ETH)` à froid (`vm.cool` sur vault, pool v3, WETH, USDG), swap direct contre le pool v3 0,01 % avec lecture de la TWAP 30 min : **304 012 gas** (≈ 0,02 $ au gas actuel, 0,42 $ au pic). La sortie est identique à la quote du QuoterV2 officiel pour le même bloc.
+
 ### 4.2 Gouvernance : merkle root (D2) vs écriture par wallet
 | Opération | Gas | Coût actuel | Coût au pic |
 |---|---|---|---|

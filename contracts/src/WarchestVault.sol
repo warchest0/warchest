@@ -27,13 +27,15 @@ interface IWarchestRoundSource {
 ///      - No owner, no upgradability, no function that sends ETH or USDG to an arbitrary address. USDG can only leave
 ///        towards the Across SpokePool, and only for the immutable `bridgeRecipient` on `destinationChainId`.
 ///      - `keeper` (bot EOA, replaceable by the guardian) can only (1) trigger conversions bounded by
-///        `maxConvertPerCall`, `convertCooldown` and the TWAP floor, and (2) execute the current governance decision
-///        at most once, with at most `capBps` of the NAV, at most one open position at a time, with a bridge fee
-///        bounded by `maxBridgeFeeBps`. A stolen keeper key can at worst sell ETH at
+///        `maxConvertPerCall`, `convertCooldown`, the TWAP floor and the oracle circuit breaker (short vs 6 h TWAP),
+///        and (2) execute the current governance decision at most once, with at most `capBps` of the NAV, at most
+///        one open position at a time, with a bridge fee bounded by `maxBridgeFeeBps`, after the cooldown that
+///        follows a close short of its capital. A stolen keeper key can at worst sell ETH at
 ///        `TWAP × (1 − maxSlippageBps)` and bridge ≤ cap to the Hyperliquid account once per governance decision.
 ///      - `guardian` (multisig) can pause, rotate the keeper and hand over its own role. It can never move funds,
 ///        change the recipient or the caps.
-///      - Anyone can send ETH at any time; {receive} never reverts (the hook's `flush()` depends on it).
+///      - Anyone can send ETH at any time; {receive} never reverts (the hook's `flush()` depends on it). Anyone can
+///        add USDG principal through {depositPrincipal}; it is never booked as trading profit.
 ///
 ///      Conversion venue: the Uniswap v3 0.01% WETH/USDG pool, called DIRECTLY (swap + callback) rather than through
 ///      SwapRouter02 `0xcaf681a66d020601342297493863e78c959e5cb2`: one fewer trusted contract, no token approval left
@@ -53,9 +55,10 @@ interface IWarchestRoundSource {
 ///      the same challenge window, but the amount that came back is NEVER declared by the keeper: it is the USDG
 ///      balance delta (`balance − usdgLedger`) measured when the close is finalized. Realized PnL accumulates in
 ///      `cumulativePnl`; `highWaterMark` is the level of cumulative PnL already distributed, so `distributable()`
-///      is only profit above it, and only while no position is open. Hook fee inflows and ETH price moves are
-///      treasury principal, not trading profit, so they never become distributable. The distributor (S3.4, D7) is
-///      immutable and may be `address(0)` = distribution permanently disabled for this deployment.
+///      is only profit above it, and only while no position is open. Hook fee inflows, ETH price moves, principal
+///      deposits and any USDG that cannot be tied to a position's shortfall are treasury principal, not trading
+///      profit, so they never become distributable. The distributor (S3.4, D7) is immutable and may be `address(0)`
+///      = distribution permanently disabled for this deployment.
 contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using TransientSlot for *;
@@ -148,6 +151,13 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     uint16 public constant MAX_CAP_BPS = 2_000;
     /// @dev Deploy-time sanity bound on `maxBridgeFeeBps` (5%).
     uint16 internal constant MAX_BRIDGE_FEE_BPS = 500;
+    /// @notice Long TWAP window of the oracle circuit breaker in {convertEthToUsdg}: the `twapWindow` TWAP must stay
+    ///         within `maxTwapDeviationTicks` of the 6 h TWAP (the pool keeps ≈ 44 h of history). A dump HELD for
+    ///         `twapWindow` drags the short TWAP (and the floor) down; it cannot drag the 6 h one without holding
+    ///         the price for hours against arbitrage.
+    uint32 public constant LONG_TWAP_WINDOW = 6 hours;
+    /// @dev `lateReturnWindow = LATE_RETURN_WINDOWS × reportChallengeWindow`.
+    uint64 internal constant LATE_RETURN_WINDOWS = 4;
     /// @dev Transient flag set only for the duration of a pool swap initiated by this contract.
     bytes32 private constant IN_SWAP_SLOT = keccak256("warchest.vault.inSwap");
 
@@ -159,6 +169,8 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     uint16 public immutable maxSlippageBps;
     uint256 public immutable maxConvertPerCall;
     uint64 public immutable convertCooldown;
+    /// @notice Max |twapTick − longTwapTick| a conversion tolerates: `2 × maxSlippageBps` (1 tick ≈ 1 bp).
+    int24 public immutable maxTwapDeviationTicks;
 
     IAcrossSpokePool public immutable spokePool;
     address public immutable bridgeRecipient;
@@ -171,6 +183,9 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     uint8 public immutable leverage;
     uint16 public immutable takeProfitBps;
     uint64 public immutable reportChallengeWindow;
+    /// @notice How long after {finalizeClose} a late return can still count as PnL of the closed position
+    ///         (`4 × reportChallengeWindow`); later arrivals are principal.
+    uint64 public immutable lateReturnWindow;
     /// @notice The only address that may pull distributable profit (S3.4). `address(0)` = disabled forever.
     address public immutable distributor;
 
@@ -211,6 +226,14 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     uint256 public highWaterMark;
     /// @notice Decision id of the most recently closed position (late returns are attributed to it).
     uint256 public lastClosedDecisionId;
+    /// @notice Timestamp of the last {finalizeClose} (anchor of `lateReturnWindow`).
+    uint64 public lastClosedAt;
+    /// @notice USDG the last closed position was still short of its capital when finalized: the most a late
+    ///         return can still book as PnL. Anything beyond is principal (see {reconcile}).
+    uint256 public lateReturnAllowance;
+    /// @notice Earliest time the next order may execute: `reportChallengeWindow` after a close that returned less
+    ///         than its capital, so the guardian can react to a "closed with nothing back" before more USDG leaves.
+    uint64 public nextExecuteAt;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Events & errors
@@ -244,6 +267,8 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     );
     event LateReturn(uint256 indexed decisionId, uint256 amount, int256 cumulativePnl);
     event Donation(uint256 amount);
+    /// @notice USDG deposited through {depositPrincipal}: accounted as principal, never as PnL.
+    event PrincipalDeposited(address indexed from, uint256 amount);
     event Distributed(address indexed to, uint256 amount, uint256 highWaterMark);
 
     error ZeroAddress();
@@ -278,6 +303,11 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     error NotDistributor();
     error ExceedsDistributable(uint256 amount, uint256 distributable);
     error NothingToReconcile();
+    error OracleDeviation(int24 twapTick, int24 longTwapTick, int24 maxDeviation);
+    error ReportPending(uint256 decisionId, uint256 finalAt);
+    error PositionTooYoung(uint256 decisionId, uint256 closableAt);
+    error ExecuteCooldown(uint256 nextAllowedAt);
+    error ZeroAmount();
 
     // ---------------------------------------------------------------------------------------------------------------
     // Construction
@@ -305,13 +335,14 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
             revert PoolMismatch();
         }
         if (
-            cp.twapWindow == 0 || cp.maxSlippageBps == 0 || cp.maxSlippageBps > MAX_SLIPPAGE_BPS
-                || cp.maxConvertPerCall == 0
+            cp.twapWindow == 0 || cp.twapWindow >= LONG_TWAP_WINDOW || cp.maxSlippageBps == 0
+                || cp.maxSlippageBps > MAX_SLIPPAGE_BPS || cp.maxConvertPerCall == 0
         ) revert InvalidParams();
         if (
             bridge.destinationChainId == 0 || op.capBps == 0 || op.capBps > MAX_CAP_BPS
                 || op.maxBridgeFeeBps > MAX_BRIDGE_FEE_BPS || op.maxDecisionAge == 0 || op.stopLossBps == 0
                 || op.stopLossBps >= BPS || op.leverage == 0 || op.takeProfitBps == 0 || op.reportChallengeWindow == 0
+                || op.reportChallengeWindow > type(uint64).max / LATE_RETURN_WINDOWS
         ) revert InvalidParams();
 
         guardian = guardian_;
@@ -328,6 +359,7 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
         maxSlippageBps = cp.maxSlippageBps;
         maxConvertPerCall = cp.maxConvertPerCall;
         convertCooldown = cp.convertCooldown;
+        maxTwapDeviationTicks = int24(uint24(2 * uint24(cp.maxSlippageBps)));
         capBps = op.capBps;
         maxBridgeFeeBps = op.maxBridgeFeeBps;
         maxDecisionAge = op.maxDecisionAge;
@@ -335,6 +367,7 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
         leverage = op.leverage;
         takeProfitBps = op.takeProfitBps;
         reportChallengeWindow = op.reportChallengeWindow;
+        lateReturnWindow = op.reportChallengeWindow * LATE_RETURN_WINDOWS;
         distributor = distributor_;
         emit GuardianChanged(address(0), guardian_);
         emit KeeperChanged(address(0), keeper_);
@@ -401,9 +434,13 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     ///      `twapWindow` TWAP of the pool minus `maxSlippageBps`, and the swap reverts if it delivers less than
     ///      `minOut`. Together with `maxConvertPerCall` and `convertCooldown` this bounds the damage of any sequence
     ///      of malicious calls to `maxSlippageBps` of the ETH converted, at a rate the guardian can interrupt.
+    ///      Oracle circuit breaker: the short TWAP must be within `maxTwapDeviationTicks` of the `LONG_TWAP_WINDOW`
+    ///      TWAP, otherwise the oracle itself is being moved (a dump held for `twapWindow`, or a market too unstable
+    ///      to price the floor) and the conversion waits (fail-closed, nothing is sold).
     ///      The swap is exact-input with the extreme price limit; a partial fill (pool liquidity exhausted) reverts.
     /// @param amountIn ETH to sell, in wei. Must be ≤ `maxConvertPerCall` and ≤ the vault's ETH balance.
-    /// @param minOut Minimum USDG (6 decimals) to receive; must be ≥ {twapFloor}(amountIn).
+    /// @param minOut Minimum USDG (6 decimals) to receive; must be ≥ {twapFloor}(amountIn). Keeper policy:
+    ///        `max(twapFloor, quoter × 0.999)` so a sandwicher cannot capture the spot − floor gap.
     /// @return amountOut USDG received.
     function convertEthToUsdg(uint256 amountIn, uint256 minOut)
         external
@@ -419,7 +456,9 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
         if (amountIn > ethBalance) revert InsufficientEth(amountIn, ethBalance);
         uint256 nextAllowedAt = uint256(lastConvertAt) + convertCooldown;
         if (block.timestamp < nextAllowedAt) revert ConvertCooldown(nextAllowedAt);
-        uint256 floor = twapFloor(amountIn);
+        int24 shortTick = twapTick();
+        _checkOracleStable(shortTick);
+        uint256 floor = _floorAtTick(shortTick, amountIn);
         if (minOut < floor) revert MinOutBelowFloor(minOut, floor);
         lastConvertAt = uint64(block.timestamp);
 
@@ -490,11 +529,12 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
         emit OrderExecuted(d.id, d.asset, d.side, amount, outputAmount, depositId, stopLossBps, leverage, takeProfitBps);
     }
 
-    /// @dev New id, no open position, round not stale.
+    /// @dev New id, no open position, cooldown after a short close elapsed, round not stale.
     function _checkDecision(IWarchestDecisionSource.Decision memory d) internal view {
         if (d.id == 0) revert NoDecision();
         if (d.id <= lastExecutedDecisionId) revert DecisionAlreadyExecuted(d.id, lastExecutedDecisionId);
         if (_position.decisionId != 0) revert PositionOpen(_position.decisionId);
+        if (block.timestamp < nextExecuteAt) revert ExecuteCooldown(nextExecuteAt);
         uint256 roundEndsAt = IWarchestRoundSource(address(governance)).getRound(d.roundId).endsAt;
         if (roundEndsAt == 0 || block.timestamp > roundEndsAt + maxDecisionAge) {
             revert DecisionStale(d.id, roundEndsAt);
@@ -567,14 +607,18 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @notice Keeper mark-to-market report of the Hyperliquid account for the open position. Counts only after
-    ///         `reportChallengeWindow`, unless the guardian revokes it in the meantime. A new report replaces the
-    ///         pending one (and restarts the window); a pending report that already matured is kept as the final
-    ///         report of the position until a newer one matures.
+    ///         `reportChallengeWindow`, unless the guardian revokes it in the meantime. A new report is refused while
+    ///         one is still pending (otherwise the keeper could re-report forever and no report would ever mature,
+    ///         suppressing take-profit votes); a revoked or matured report can be followed by a new one, and a
+    ///         matured report is kept as the final report of the position until a newer one matures.
     /// @param decisionId Must be the open position's decision id (not closing).
     /// @param equityUsd Equity in USDC (6 decimals). Informational: it gates close votes, never moves funds.
     function reportPosition(uint256 decisionId, uint256 equityUsd) external onlyKeeper whenNotPaused {
         _requireOpen(decisionId);
         Report storage last = _lastReport[decisionId];
+        if (last.reportedAt != 0 && !last.revoked && !_isFinal(last)) {
+            revert ReportPending(decisionId, uint256(last.reportedAt) + reportChallengeWindow);
+        }
         if (_isFinal(last)) _finalReport[decisionId] = last;
         uint64 now_ = uint64(block.timestamp);
         _lastReport[decisionId] = Report({equity: equityUsd, reportedAt: now_, revoked: false});
@@ -615,8 +659,13 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     /// @notice Keeper declares the position closed on Hyperliquid and its funds bridged back. Allowed while paused
     ///         (bringing funds home is always desirable). The amount that came back is NOT a parameter: it is
     ///         measured on-chain by {finalizeClose} after the guardian's challenge window.
+    /// @dev A position must be at least `reportChallengeWindow` old before the keeper may close it on its own
+    ///      initiative; the minimum age does not apply when {mustClose} is true, since none of its causes (close
+    ///      vote, newer decision, pause) can be produced by the keeper alone.
     function reportClosed(uint256 decisionId) external onlyKeeper {
         _requireOpen(decisionId);
+        uint256 closableAt = uint256(_position.openedAt) + reportChallengeWindow;
+        if (block.timestamp < closableAt && !mustClose()) revert PositionTooYoung(decisionId, closableAt);
         uint64 now_ = uint64(block.timestamp);
         _position.closeReportedAt = now_;
         emit CloseReported(decisionId, now_, now_ + reportChallengeWindow);
@@ -638,6 +687,11 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
     ///         the vault from outside since the last accounting (`balance − usdgLedger`): the bridge return, an
     ///         Across refund of an expired deposit, or nothing at all if the position was liquidated / stopped out
     ///         with nothing left. Realized PnL = returned − capital. The vault is never bricked by a total loss.
+    ///         Principal that must NOT be attributed to the position goes through {depositPrincipal}.
+    /// @dev If the position came back short of its capital, the shortfall is remembered as `lateReturnAllowance`
+    ///      (a later Across chunk may still restore it, see {reconcile}) and the next order waits
+    ///      `reportChallengeWindow` (`nextExecuteAt`): a "closed, nothing came back" is public for a full window
+    ///      before more USDG can leave, so a stolen key cannot chain fake closes faster than the guardian can pause.
     function finalizeClose(uint256 decisionId) external nonReentrant {
         Position storage p = _position;
         if (p.decisionId != decisionId || decisionId == 0 || p.closeReportedAt == 0) revert NotClosing(decisionId);
@@ -650,24 +704,48 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
         int256 pnl = int256(returned) - int256(capital);
         cumulativePnl += pnl;
         lastClosedDecisionId = decisionId;
+        lastClosedAt = uint64(block.timestamp);
+        if (returned < capital) {
+            lateReturnAllowance = capital - returned;
+            nextExecuteAt = uint64(block.timestamp) + reportChallengeWindow;
+        } else {
+            lateReturnAllowance = 0;
+        }
         delete _position;
         emit PositionClosed(decisionId, capital, returned, pnl, cumulativePnl);
     }
 
-    /// @notice Accounts USDG that arrived while no position is open: a late chunk of the last position's return
-    ///         (counted as its PnL) or, if nothing was ever closed, a donation (principal, not PnL). Keeper only:
-    ///         it can only ever INCREASE the accounted balance.
+    /// @notice Accounts USDG that arrived while no position is open. Keeper only: it can only ever INCREASE the
+    ///         accounted balance. A stray amount counts as a late return (PnL) of the last closed position ONLY
+    ///         within `lateReturnWindow` of its finalization and ONLY up to what that position was still short of
+    ///         its capital (`lateReturnAllowance`: a second Across chunk can restore a shortfall, but no external
+    ///         inflow can ever be booked as trading profit); everything else is principal (`Donation`), never
+    ///         distributable.
     function reconcile() external onlyKeeper {
         if (_position.decisionId != 0) revert PositionOpen(_position.decisionId);
         uint256 stray = usdg.balanceOf(address(this)) - usdgLedger;
         if (stray == 0) revert NothingToReconcile();
         usdgLedger += stray;
-        if (lastClosedDecisionId != 0) {
-            cumulativePnl += int256(stray);
-            emit LateReturn(lastClosedDecisionId, stray, cumulativePnl);
-        } else {
-            emit Donation(stray);
+        uint256 asPnl;
+        if (lateReturnAllowance != 0 && block.timestamp <= uint256(lastClosedAt) + lateReturnWindow) {
+            asPnl = stray < lateReturnAllowance ? stray : lateReturnAllowance;
+            lateReturnAllowance -= asPnl;
+            cumulativePnl += int256(asPnl);
+            emit LateReturn(lastClosedDecisionId, asPnl, cumulativePnl);
         }
+        if (stray > asPnl) emit Donation(stray - asPnl);
+    }
+
+    /// @notice Adds USDG to the treasury as PRINCIPAL. Permissionless, allowed at any time (paused, position open
+    ///         or closing): the amount is pulled from the caller and accounted at once, so it can never be measured
+    ///         as a position's return nor become PnL. The only correct way to top up the treasury in USDG.
+    function depositPrincipal(uint256 amount) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        uint256 before = usdg.balanceOf(address(this));
+        usdg.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = usdg.balanceOf(address(this)) - before;
+        usdgLedger += received;
+        emit PrincipalDeposited(msg.sender, received);
     }
 
     /// @notice Realized profit above the high-water mark that a distributor could pull: 0 while a position is
@@ -711,15 +789,41 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
 
     /// @notice Arithmetic-mean tick of the pool over the last `twapWindow` seconds (Uniswap OracleLibrary semantics:
     ///         rounds toward negative infinity). Reverts "OLD" if the pool history is shorter than the window.
-    function twapTick() public view returns (int24 tick) {
+    function twapTick() public view returns (int24) {
+        return _meanTick(twapWindow);
+    }
+
+    /// @notice Arithmetic-mean tick over the last `LONG_TWAP_WINDOW` seconds (reference of the circuit breaker).
+    function longTwapTick() public view returns (int24) {
+        return _meanTick(LONG_TWAP_WINDOW);
+    }
+
+    /// @notice True when {convertEthToUsdg} would pass the oracle circuit breaker right now.
+    function oracleStable() external view returns (bool) {
+        return _deviation(twapTick(), longTwapTick()) <= maxTwapDeviationTicks;
+    }
+
+    function _meanTick(uint32 window) internal view returns (int24 tick) {
         uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = twapWindow;
+        secondsAgos[0] = window;
         secondsAgos[1] = 0;
         (int56[] memory cumulatives,) = pool.observe(secondsAgos);
         int56 delta = cumulatives[1] - cumulatives[0];
-        int56 window = int56(uint56(twapWindow));
-        tick = int24(delta / window);
-        if (delta < 0 && (delta % window != 0)) tick--;
+        int56 w = int56(uint56(window));
+        tick = int24(delta / w);
+        if (delta < 0 && (delta % w != 0)) tick--;
+    }
+
+    /// @dev Circuit breaker of {convertEthToUsdg}: |short TWAP − long TWAP| ≤ `maxTwapDeviationTicks`.
+    function _checkOracleStable(int24 shortTick) internal view {
+        int24 longTick = longTwapTick();
+        if (_deviation(shortTick, longTick) > maxTwapDeviationTicks) {
+            revert OracleDeviation(shortTick, longTick, maxTwapDeviationTicks);
+        }
+    }
+
+    function _deviation(int24 a, int24 b) internal pure returns (int24) {
+        return a > b ? a - b : b - a;
     }
 
     /// @notice USDG value of `ethAmount` wei at the TWAP price (no haircut).
@@ -729,7 +833,11 @@ contract WarchestVault is IWarchestVaultView, IUniswapV3SwapCallback, Reentrancy
 
     /// @notice USDG a conversion of `ethAmount` must at least return: TWAP value × (1 − maxSlippageBps).
     function twapFloor(uint256 ethAmount) public view returns (uint256) {
-        return quoteEthInUsdg(ethAmount) * (BPS - maxSlippageBps) / BPS;
+        return _floorAtTick(twapTick(), ethAmount);
+    }
+
+    function _floorAtTick(int24 tick, uint256 ethAmount) internal view returns (uint256) {
+        return quoteAtTick(tick, ethAmount) * (BPS - maxSlippageBps) / BPS;
     }
 
     /// @notice Liquid net asset value in USDG (6 decimals): USDG balance + ETH balance valued at {twapFloor}.

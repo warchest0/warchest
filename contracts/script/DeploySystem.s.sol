@@ -21,7 +21,10 @@ import {DeployWarchest} from "./DeployWarchest.s.sol";
 ///         governance → (distributor) → vault → governance.setVault → (distributor.setVault) → eligible assets
 ///         → token + hook (fee recipient = vault) + pool + liquidity → guardian handover to the multisig.
 /// @dev The broadcaster is the TEMPORARY guardian during wiring, then starts a two-step transfer to `GUARDIAN`
-///      (the multisig must call `acceptGuardian()` on governance, vault and distributor). Mainnet defaults.
+///      (the multisig must call `acceptGuardian()` on governance, vault and distributor). Until it does, the
+///      deployer key holds every guardian power (pause, keeper rotation, report vetoes, delayed updater rotation,
+///      cancelling its own handover) but can never move funds; keep the key offline and let no capital flow before
+///      the multisig has accepted on all three contracts. Mainnet defaults: the script refuses any other chain.
 ///      Environment (defaults in brackets):
 ///      - `GUARDIAN` multisig, `UPDATER` indexer, `KEEPER` bot, `HL_ACCOUNT` Hyperliquid multisig account — required
 ///      - `ENABLE_DISTRIBUTOR` [false] — D7 (legal) decides; false = distribution permanently disabled
@@ -48,6 +51,11 @@ contract DeploySystem is DeployWarchest {
         WarchestDistributor distributor;
         Deployment launch;
     }
+
+    /// @notice The only chain the mainnet defaults (pool, WETH, USDG, SpokePool, USDC on HyperEVM) are valid for.
+    uint256 public constant ROBINHOOD_CHAIN_ID = 4663;
+
+    error WrongChain(uint256 chainId, uint256 expected);
 
     function run() external override returns (WarchestHook) {
         SystemConfig memory sys = loadSystemConfig();
@@ -79,8 +87,10 @@ contract DeploySystem is DeployWarchest {
         cfg = loadConfigWithVault(address(1)); // placeholder, replaced by the deployed vault
     }
 
-    /// @notice Robinhood mainnet defaults for everything that is not a role address.
-    function _defaults(SystemConfig memory sys, address hlAccount) internal pure returns (SystemConfig memory) {
+    /// @notice Robinhood mainnet defaults for everything that is not a role address. Reverts on any other chain:
+    ///         these addresses exist nowhere else, and a vault wired to them elsewhere would be bricked.
+    function _defaults(SystemConfig memory sys, address hlAccount) internal view returns (SystemConfig memory) {
+        if (block.chainid != ROBINHOOD_CHAIN_ID) revert WrongChain(block.chainid, ROBINHOOD_CHAIN_ID);
         sys.gov = WarchestGovernance.Params({
             challengeWindow: 6 hours, votingPeriod: 1 days, maxRootAge: 2 days, quorumBps: 1000
         });
@@ -115,7 +125,7 @@ contract DeploySystem is DeployWarchest {
 
     function defaultSystemConfig(address guardian, address updater, address keeper, address hlAccount, bool dist)
         public
-        pure
+        view
         returns (SystemConfig memory sys)
     {
         sys.guardian = guardian;

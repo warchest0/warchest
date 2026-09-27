@@ -17,6 +17,7 @@ contract WarchestVaultReportsTest is VaultFixture {
     );
     event LateReturn(uint256 indexed decisionId, uint256 amount, int256 cumulativePnl);
     event Donation(uint256 amount);
+    event PrincipalDeposited(address indexed from, uint256 amount);
     event Distributed(address indexed to, uint256 amount, uint256 highWaterMark);
 
     uint256 id;
@@ -42,6 +43,7 @@ contract WarchestVaultReportsTest is VaultFixture {
     }
 
     function _closeWith(uint256 returned) internal {
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW); // minimum position age before a keeper-initiated close
         vm.prank(keeper);
         vault.reportClosed(id);
         _return(returned);
@@ -115,16 +117,22 @@ contract WarchestVaultReportsTest is VaultFixture {
         assertEq(eq, 70_000e6);
     }
 
-    function test_report_replacementBeforeMaturityDropsPrevious() public {
+    /// Review L1: a pending report cannot be replaced (the keeper could otherwise re-report forever and no report
+    /// would ever mature); it matures on schedule and only then can a new one be filed.
+    function test_report_secondReportWhilePendingRejected() public {
         _report(50_000e6);
-        vm.warp(vm.getBlockTimestamp() + 1);
-        _report(70_000e6);
-        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW - 1); // first would have matured, but it was replaced
-        (, bool ok) = vault.finalizedEquity(id);
-        assertFalse(ok);
-        vm.warp(vm.getBlockTimestamp() + 1);
-        (uint256 eq,) = vault.finalizedEquity(id);
-        assertEq(eq, 70_000e6);
+        uint256 finalAt = vm.getBlockTimestamp() + REPORT_WINDOW;
+        vm.warp(finalAt - 1);
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(WarchestVault.ReportPending.selector, id, finalAt));
+        vault.reportPosition(id, 70_000e6);
+        vm.warp(finalAt);
+        (uint256 eq, bool ok) = vault.finalizedEquity(id);
+        assertTrue(ok);
+        assertEq(eq, 50_000e6);
+        _report(70_000e6); // matured: a new one may be filed, the matured one keeps counting meanwhile
+        (eq,) = vault.finalizedEquity(id);
+        assertEq(eq, 50_000e6);
     }
 
     function test_revokeReport_withinWindow() public {
@@ -314,17 +322,26 @@ contract WarchestVaultReportsTest is VaultFixture {
         assertEq(vault.distributable(), 0);
     }
 
-    /// Liquidated / stopped out with nothing left: nothing comes back, PnL = −capital, the vault keeps working.
+    /// Liquidated / stopped out with nothing left: nothing comes back, PnL = −capital, the vault keeps working
+    /// after a cooldown of one challenge window (review L2: a "closed with nothing back" is public before more
+    /// USDG can leave).
     function test_finalizeClose_nothingReturned_vaultNotBricked() public {
         uint256 ledger = vault.usdgLedger();
         _closeWith(0);
         assertEq(vault.cumulativePnl(), -int256(capital));
         assertEq(vault.usdgLedger(), ledger);
         assertEq(vault.position().decisionId, 0);
-        // next decision executes against the remaining liquid NAV
+        assertEq(vault.lateReturnAllowance(), capital);
+        uint256 nextExecuteAt = vm.getBlockTimestamp() + REPORT_WINDOW;
+        assertEq(vault.nextExecuteAt(), nextExecuteAt);
+        // next decision executes against the remaining liquid NAV, once the cooldown has elapsed
         gov.nextDecision(ETH_ASSET, IWarchestDecisionSource.Side.Short);
         uint256 next = vault.maxOrderAmount();
         assertGt(next, 0);
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(WarchestVault.ExecuteCooldown.selector, nextExecuteAt));
+        vault.executeDecision(next, next, uint32(vm.getBlockTimestamp()), uint32(vm.getBlockTimestamp()) + FILL_WINDOW);
+        vm.warp(nextExecuteAt);
         _execute(next);
         assertEq(vault.position().decisionId, id + 1);
         assertEq(vault.position().capital, next);
@@ -399,16 +416,105 @@ contract WarchestVaultReportsTest is VaultFixture {
     // Reconcile
     // ---------------------------------------------------------------------------------------------------------------
 
+    /// Review M2: a late return restores at most what the close was short of (the second Across chunk); the rest
+    /// is principal, never distributable.
     function test_reconcile_lateReturnAddsPnl() public {
         _closeWith(capital / 2);
-        _return(capital / 2 + 1_000e6); // the second Across chunk arrives later
+        uint256 shortfall = capital - capital / 2;
+        assertEq(vault.lateReturnAllowance(), shortfall);
+        _return(shortfall + 1_000e6); // the second Across chunk arrives later, with the profit
         vm.expectEmit(true, false, false, true, address(vault));
-        emit LateReturn(id, capital / 2 + 1_000e6, 1_000e6);
+        emit LateReturn(id, shortfall, 0);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit Donation(1_000e6);
         vm.prank(keeper);
         vault.reconcile();
-        assertEq(vault.cumulativePnl(), 1_000e6);
+        assertEq(vault.cumulativePnl(), 0, "the shortfall is restored, the excess is principal");
+        assertEq(vault.lateReturnAllowance(), 0);
         assertEq(vault.usdgLedger(), usdg.balanceOf(address(vault)));
-        assertEq(vault.distributable(), 1_000e6);
+        assertEq(vault.distributable(), 0);
+    }
+
+    function test_reconcile_lateReturnInChunksUpToShortfall() public {
+        _closeWith(0);
+        _return(1_000e6);
+        vm.prank(keeper);
+        vault.reconcile();
+        assertEq(vault.cumulativePnl(), -int256(capital) + 1_000e6);
+        assertEq(vault.lateReturnAllowance(), capital - 1_000e6);
+        _return(capital - 1_000e6);
+        vm.prank(keeper);
+        vault.reconcile();
+        assertEq(vault.cumulativePnl(), 0);
+        assertEq(vault.lateReturnAllowance(), 0);
+        _return(1);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit Donation(1);
+        vm.prank(keeper);
+        vault.reconcile();
+        assertEq(vault.cumulativePnl(), 0);
+    }
+
+    function test_reconcile_lateReturnAfterWindowIsPrincipal() public {
+        _closeWith(0);
+        vm.warp(vm.getBlockTimestamp() + vault.lateReturnWindow() + 1);
+        _return(capital);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit Donation(capital);
+        vm.prank(keeper);
+        vault.reconcile();
+        assertEq(vault.cumulativePnl(), -int256(capital), "too late to be the position's return");
+        assertEq(vault.distributable(), 0);
+        assertEq(vault.usdgLedger(), usdg.balanceOf(address(vault)));
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // depositPrincipal (review M2)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    function test_depositPrincipal_neverPnl_anyTimeAnyone() public {
+        address partner = makeAddr("partner");
+        usdg.mint(partner, 300_000e6);
+        vm.prank(partner);
+        usdg.approve(address(vault), type(uint256).max);
+
+        // while the position is open
+        uint256 ledger = vault.usdgLedger();
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit PrincipalDeposited(partner, 100_000e6);
+        vm.prank(partner);
+        vault.depositPrincipal(100_000e6);
+        assertEq(vault.usdgLedger(), ledger + 100_000e6);
+        assertEq(vault.usdgLedger(), usdg.balanceOf(address(vault)));
+
+        // while closing: not measured as the position's return
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW);
+        vm.prank(keeper);
+        vault.reportClosed(id);
+        vm.prank(partner);
+        vault.depositPrincipal(100_000e6);
+        _return(capital);
+        vm.warp(vm.getBlockTimestamp() + REPORT_WINDOW);
+        vault.finalizeClose(id);
+        assertEq(vault.cumulativePnl(), 0);
+
+        // while paused, after a close: still principal
+        vm.prank(guardian);
+        vault.setPaused(true);
+        vm.prank(partner);
+        vault.depositPrincipal(100_000e6);
+        assertEq(vault.cumulativePnl(), 0);
+        assertEq(vault.distributable(), 0);
+        assertEq(vault.usdgLedger(), usdg.balanceOf(address(vault)));
+        assertEq(usdg.balanceOf(partner), 0);
+    }
+
+    function test_depositPrincipal_reverts() public {
+        vm.expectRevert(WarchestVault.ZeroAmount.selector);
+        vault.depositPrincipal(0);
+        vm.prank(attacker); // no allowance / balance
+        vm.expectRevert();
+        vault.depositPrincipal(1);
     }
 
     function test_reconcile_donationBeforeAnyClose() public {
@@ -544,6 +650,7 @@ contract WarchestVaultReportsTest is VaultFixture {
         assertEq(vault.cumulativePnl(), 6_000e6);
         assertEq(vault.highWaterMark(), 10_000e6);
         assertEq(vault.distributable(), 0);
+        vm.warp(vault.nextExecuteAt()); // the loss triggers the cooldown before the next order
 
         // position 3 makes 6 000: only 2 000 above the mark
         gov.nextDecision(BTC, IWarchestDecisionSource.Side.Long);

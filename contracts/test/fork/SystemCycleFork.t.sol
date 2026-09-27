@@ -125,7 +125,9 @@ contract SystemCycleForkTest is Test, DeploySystem {
         s.launch.hook.flush();
         assertEq(address(s.vault).balance, 2 ether - 1);
 
-        // 3. keeper converts the fees at no worse than TWAP − 1%
+        // 3. keeper converts the fees at no worse than TWAP − 1%, once the 30 min and 6 h TWAPs agree (live market:
+        //    if ETH just moved > 2%, the breaker is correctly tripped; let the oracle settle on the current price)
+        if (!s.vault.oracleStable()) vm.warp(_now() + s.vault.LONG_TWAP_WINDOW());
         uint256 ethIn = address(s.vault).balance;
         uint256 floor = s.vault.twapFloor(ethIn);
         vm.prank(bot);

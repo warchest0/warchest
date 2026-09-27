@@ -58,6 +58,18 @@ forge script script/DeploySystem.s.sol --rpc-url robinhood --account <keystore> 
 
 Une fois le script terminé, le multisig doit appeler `acceptGuardian()` sur la gouvernance, le vault et le distributor.
 
+Garde-fous du script (revue de sécurité) :
+- Les valeurs par défaut (pool v3, WETH, USDG, SpokePool, USDC HyperEVM) n'existent que sur le mainnet **4663** : le script
+  revert avec `WrongChain` sur toute autre chaîne (un vault câblé sur ces adresses ailleurs serait inutilisable, et
+  ses immutables ne se corrigent pas). Les tests fork tournent sur un fork du mainnet, donc passent.
+- **Fenêtre « déployeur = guardian temporaire »** : entre le déploiement et l'`acceptGuardian()` du multisig sur les
+  trois contrats, la clé de déploiement détient tous les pouvoirs du guardian (pause, `setKeeper`, `revokeReport` /
+  `revokeCloseReport`, `proposeUpdater` — différé de 72 h côté gouvernance et de `timelock + 3 j` côté distributor —,
+  `cancelRound`, `setEligibleAssets`, annulation de son propre transfert par un nouveau `transferGuardian`) mais ne
+  peut **jamais** déplacer de fonds. Consignes : clé de déploiement fraîche, mise hors ligne dès la fin du script ;
+  acceptation par le multisig **avant** d'annoncer le pool et avant tout flux de trésorerie ; vérifier
+  `guardian() == multisig` sur les trois contrats avant la première conversion.
+
 **Vérifié** par `test/fork/SystemCycleFork.t.sol`, sur un fork du mainnet 4663 avec le vrai PoolManager v4, le vrai pool v3 WETH/USDG et le vrai SpokePool Across. Le test déroule :
 1. déploiement et branchement ;
 2. achat de 20 ETH, qui envoie 2 ETH de fee au vault ;

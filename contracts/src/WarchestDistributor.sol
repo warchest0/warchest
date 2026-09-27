@@ -26,7 +26,11 @@ interface IWarchestVaultDistribution {
 ///      4. `claim` pays `cumulativeAmount − claimed[account]` to the account (anyone may trigger it).
 ///      Safety bounds: `totalCumulative ≤ totalFunded` and never decreases; total claims never exceed the active
 ///      root's `totalCumulative`, so an under-declared tree can at worst stall late claimers, never overdraw.
-///      The guardian can never move funds.
+///      The guardian can never move funds: it cannot propose a root, and it cannot take the updater's place without
+///      a public delay of `updaterDelay` (`timelock + 3 days`), mirroring WarchestGovernance (D9). Residual trust:
+///      after that public rotation the guardian+updater pair can still misallocate FUNDED profit (never principal:
+///      the vault only ever hands over `distributable()`); every root is published with its tree hash so an
+///      independent verifier can detect it during the root's own timelock.
 contract WarchestDistributor is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -37,12 +41,21 @@ contract WarchestDistributor is ReentrancyGuardTransient {
         uint64 readyAt;
     }
 
+    /// @dev Extra public notice on top of `timelock` before a proposed updater can be applied.
+    uint64 internal constant UPDATER_ROTATION_NOTICE = 3 days;
+
     IERC20 public immutable usdg;
     uint64 public immutable timelock;
+    /// @notice Delay between proposing and applying a new updater (`timelock + 3 days`): a guardian that wants to
+    ///         publish roots itself must announce it publicly for at least that long, then wait the root timelock.
+    uint64 public immutable updaterDelay;
 
     address public guardian;
     address public pendingGuardian;
     address public updater;
+    /// @notice Proposed updater and the earliest time it can be applied (see `updaterDelay`).
+    address public pendingUpdater;
+    uint64 public pendingUpdaterReadyAt;
     /// @notice Set once (the vault takes this contract's address in its constructor).
     IWarchestVaultDistribution public vault;
 
@@ -65,6 +78,8 @@ contract WarchestDistributor is ReentrancyGuardTransient {
     event RootAccepted(bytes32 root, uint256 totalCumulative, bytes32 treeHash);
     event Claimed(address indexed account, uint256 amount, uint256 cumulativeAmount);
     event UpdaterChanged(address indexed previous, address indexed current);
+    event UpdaterChangeProposed(address indexed proposed, uint64 readyAt);
+    event UpdaterChangeCancelled(address indexed proposed);
     event GuardianTransferStarted(address indexed current, address indexed pending);
     event GuardianChanged(address indexed previous, address indexed current);
 
@@ -84,6 +99,8 @@ contract WarchestDistributor is ReentrancyGuardTransient {
     error InvalidProof();
     error NothingToClaim();
     error ExceedsRootTotal();
+    error NoPendingUpdater();
+    error UpdaterDelayNotElapsed(uint64 readyAt);
 
     constructor(IERC20 usdg_, address guardian_, address updater_, uint64 timelock_) {
         if (address(usdg_) == address(0) || guardian_ == address(0) || updater_ == address(0)) revert ZeroAddress();
@@ -91,6 +108,7 @@ contract WarchestDistributor is ReentrancyGuardTransient {
         guardian = guardian_;
         updater = updater_;
         timelock = timelock_;
+        updaterDelay = timelock_ + UPDATER_ROTATION_NOTICE;
         emit GuardianChanged(address(0), guardian_);
         emit UpdaterChanged(address(0), updater_);
     }
@@ -111,11 +129,33 @@ contract WarchestDistributor is ReentrancyGuardTransient {
         emit VaultSet(address(vault_));
     }
 
-    /// @notice Rotating the updater cannot shortcut the timelock: any root it proposes still waits and is revocable.
-    function setUpdater(address updater_) external onlyGuardian {
+    /// @notice Starts a delayed updater rotation, publicly visible for `updaterDelay` before it can be applied. The
+    ///         guardian can therefore never quietly become the updater and pay itself the funded profit: the
+    ///         rotation and then the root are both public for days (see the contract notice).
+    function proposeUpdater(address updater_) external onlyGuardian {
         if (updater_ == address(0)) revert ZeroAddress();
-        emit UpdaterChanged(updater, updater_);
-        updater = updater_;
+        pendingUpdater = updater_;
+        pendingUpdaterReadyAt = uint64(block.timestamp) + updaterDelay;
+        emit UpdaterChangeProposed(updater_, pendingUpdaterReadyAt);
+    }
+
+    function cancelUpdaterChange() external onlyGuardian {
+        if (pendingUpdater == address(0)) revert NoPendingUpdater();
+        emit UpdaterChangeCancelled(pendingUpdater);
+        pendingUpdater = address(0);
+        pendingUpdaterReadyAt = 0;
+    }
+
+    /// @notice Applies a proposed updater once its delay has elapsed. Permissionless. Any root the new updater
+    ///         proposes still waits its own `timelock` and stays revocable.
+    function applyUpdaterChange() external {
+        address next = pendingUpdater;
+        if (next == address(0)) revert NoPendingUpdater();
+        if (block.timestamp < pendingUpdaterReadyAt) revert UpdaterDelayNotElapsed(pendingUpdaterReadyAt);
+        emit UpdaterChanged(updater, next);
+        updater = next;
+        pendingUpdater = address(0);
+        pendingUpdaterReadyAt = 0;
     }
 
     function transferGuardian(address pending_) external onlyGuardian {

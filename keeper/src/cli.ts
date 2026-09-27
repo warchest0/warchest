@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { HttpAcrossApi } from "./across/api.js";
+import { formatReturnPlan, planReturn } from "./across/bridge.js";
 import { RpcChainReader } from "./chain/reader.js";
 import { RpcChainWriter } from "./chain/writer.js";
 import { loadConfig, type Config } from "./config.js";
@@ -147,6 +148,19 @@ async function main(argv: string[]): Promise<number> {
       log.info(`kill switch done flat=${r.flat}`);
       return r.flat ? 0 : 2;
     }
+    case "return-plan": {
+      // read-only: the plan the multisig must execute for the current position (or an explicit USDC amount)
+      const cfg = loadConfig();
+      const chain = new RpcChainReader(cfg.rpcUrl, cfg.vault, cfg.governance, cfg.quoter);
+      const hl = new HttpHyperliquidInfo(cfg.hlInfoUrl);
+      const across = new HttpAcrossApi(cfg.acrossApiUrl);
+      const vault = await chain.vault();
+      const state = await hl.clearinghouseState(cfg.hlTradingAccount);
+      const amount = argv[1] ? BigInt(Math.round(Number(argv[1]) * 1e6)) : BigInt(Math.floor(Number(state.withdrawable) * 1e6));
+      const plan = await planReturn(across, vault.position.decisionId, amount, vault, cfg.vault, cfg.chainId, { tradingAccount: cfg.hlTradingAccount });
+      console.log(formatReturnPlan(plan));
+      return 0;
+    }
     case "status": {
       const cfg = loadConfig();
       const store = new Store(cfg.dbPath);
@@ -156,7 +170,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      console.log("usage: keeper <once|run|status|monitor [once]|kill [reason]>");
+      console.log("usage: keeper <once|run|status|monitor [once]|kill [reason]|return-plan [usdc]>");
       return cmd === "help" ? 0 : 1;
   }
 }

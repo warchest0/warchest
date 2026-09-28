@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createApi } from "./api.js";
 import { join } from "node:path";
 import { createWalletClient, defineChain, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -18,6 +19,7 @@ import { DAY, dayOf } from "./types.js";
  *   indexer publish [day]      snapshot + submit the root (needs UPDATER_PRIVATE_KEY)
  *   indexer verify [day]       rebuild and compare with the on-chain root (independent verifier instance)
  *   indexer run                sync + publish latest complete day (cron entry point, daily after 00:15 UTC)
+ *   indexer serve              read-only HTTP API for the frontend (PORT, default 8787); keeps syncing every minute
  */
 async function main(): Promise<void> {
   const [cmd = "run", dayArg] = process.argv.slice(2);
@@ -74,6 +76,13 @@ async function main(): Promise<void> {
       console.log(v.ok ? "OK: on-chain root matches the chain history" : `MISMATCH — escalate to the guardian:\n${v.problems.join("\n")}`);
       process.exitCode = v.ok ? 0 : 2;
       break;
+    }
+    case "serve": {
+      await sync();
+      const port = Number(process.env.PORT ?? 8787);
+      createApi({ treesDir: cfg.outDir, store, excluded: cfg.excluded }).listen(port, () => console.log(`API on :${port}`));
+      setInterval(() => void sync().catch((e) => console.error("sync failed", e)), 60_000);
+      return; // keep the store open while serving
     }
     default:
       throw new Error(`unknown command ${cmd}`);

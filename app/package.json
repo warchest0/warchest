@@ -1,0 +1,41 @@
+{
+  "name": "@warchest/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frontend dapp: holder levels, level-weighted votes, treasury transparency",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "npx serve out",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.104.0",
+    "geist": "^1.7.2",
+    "next": "^16.3.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1",
+    "viem": "^2.56.9",
+    "wagmi": "^2.19.5"
+  },
+  "devDependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.2"
+  }
+}

@@ -86,3 +86,10 @@ Only the Hyperliquid leg and the bridge return fill are simulated. They will be 
 Test network:
 - The PoolManager and the SpokePool are not a problem: v4 is present on 46630 and `MockAcrossSpokePool` replaces the SpokePool (D6).
 - However, there is no WETH/USDG v3 pool on the testnet. The testnet E2E (S5.5) will therefore have to deploy a mock WETH/USDG pool with its oracle.
+
+## Operations: oracle history depth (measured 2026-09-28)
+The vault's oracle circuit breaker reads a 6-hour TWAP from the WETH/USDG Uniswap v3 pool. The pool stores a fixed number of observations (10,809), so the time they cover shrinks as trading activity grows: ≈ 44 h on 2026-09-27, ≈ 11 h on 2026-09-28. Below 6 h, `convertEthToUsdg` reverts (fail-closed: no funds at risk, but fees stay in ETH).
+
+- Monitor: `POOL.observe([21600, 0])` must not revert with `OLD`.
+- Extend ahead of need (permissionless, ≈ 22.4k gas per slot, ≈ $1.5 per 1,000 slots at 0.025 gwei):
+  `TARGET_CARDINALITY=30000 forge script script/ExtendOracleHistory.s.sol --rpc-url robinhood --account <keystore> --broadcast`

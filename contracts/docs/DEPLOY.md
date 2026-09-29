@@ -93,3 +93,15 @@ The vault's oracle circuit breaker reads a 6-hour TWAP from the WETH/USDG Uniswa
 - Monitor: `POOL.observe([21600, 0])` must not revert with `OLD`.
 - Extend ahead of need (permissionless, ≈ 22.4k gas per slot, ≈ $1.5 per 1,000 slots at 0.025 gwei):
   `TARGET_CARDINALITY=30000 forge script script/ExtendOracleHistory.s.sol --rpc-url robinhood --account <keystore> --broadcast`
+
+## Testnet: the whole system in one command (Robinhood Chain testnet 46630)
+The testnet has the official Uniswap v4 deployment but **no WETH, no USDG, no WETH/USDG Uniswap v3 pool and no Across**. `script/DeployTestnet.s.sol` deploys testnet stand-ins (`src/mocks/testnet/TestnetVenue.sol`: WETH, a mintable 6-decimal USDG, an owner-priced oracle pool; `MockAcrossSpokePool`), then the full system through `DeploySystem`, and writes all addresses to `deployments/46630.json`.
+
+```bash
+forge script script/DeployTestnet.s.sol --rpc-url robinhood_testnet --account <keystore> --broadcast
+```
+- One funded key is enough: guardian, updater and keeper default to the deployer (`GUARDIAN`, `UPDATER`, `KEEPER`, `HL_ACCOUNT` override them).
+- Testing timings: 1 h challenge window, 1 h voting period, 1 h report window. Vault caps and risk parameters are the mainnet ones.
+- Roughly 0.05 ETH of liquidity (`LP_ETH_AMOUNT`) plus gas.
+
+Verified by `test/fork/DeployTestnetFork.t.sol` on a testnet fork (deploy → trade → fee → convert → snapshot → vote → order → close +10% → PnL → distributor funded), and by a `forge script --broadcast` run against an anvil fork of the testnet.

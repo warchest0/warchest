@@ -57,7 +57,7 @@ contract DeploySystem is DeployWarchest {
 
     error WrongChain(uint256 chainId, uint256 expected);
 
-    function run() external override returns (WarchestHook) {
+    function run() external virtual override returns (WarchestHook) {
         SystemConfig memory sys = loadSystemConfig();
         Config memory cfg = loadLaunchConfig();
         vm.startBroadcast();

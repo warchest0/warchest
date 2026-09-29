@@ -1,0 +1,65 @@
+# Off-chain services. Copy indexer/.env.example → deploy/indexer.env and keeper/.env.example → deploy/keeper.env,
+# fill them, then:  docker compose -f deploy/docker-compose.yml --profile <profile> up -d --build
+#
+# Profiles (run each role on the machine that should hold its key):
+#   indexer   → indexer-publisher (daily root, holds the UPDATER key) + indexer-api (read-only API for the frontend)
+#   verifier  → indexer-verifier: independent daily check of the published root — run it on ANOTHER machine/operator
+#   keeper    → keeper (trading loop; dry-run until MODE=live)
+#   monitor   → keeper-monitor: independent monitor — run it on ANOTHER machine (RUNBOOK: MONITOR_KILL=1)
+name: warchest
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  indexer-publisher:
+    <<: *restart
+    profiles: ["indexer"]
+    build: ../indexer
+    env_file: indexer.env
+    volumes: ["indexer-data:/app/data", "./daily.sh:/usr/local/bin/daily.sh:ro"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/daily.sh", "npx", "tsx", "src/cli.ts", "run"]
+
+  indexer-api:
+    <<: *restart
+    profiles: ["indexer"]
+    build: ../indexer
+    env_file: indexer.env
+    environment:
+      UPDATER_PRIVATE_KEY: "" # the API never needs the key
+    volumes: ["indexer-data:/app/data"]
+    command: ["serve"]
+    ports: ["8787:8787"]
+
+  indexer-verifier:
+    <<: *restart
+    profiles: ["verifier"]
+    build: ../indexer
+    env_file: indexer.env
+    environment:
+      UPDATER_PRIVATE_KEY: ""
+      AT: "02:00" # after the publisher, inside the governance challenge window
+    volumes: ["verifier-data:/app/data", "./daily.sh:/usr/local/bin/daily.sh:ro"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/daily.sh", "npx", "tsx", "src/cli.ts", "verify"]
+
+  keeper:
+    <<: *restart
+    profiles: ["keeper"]
+    build: ../keeper
+    env_file: keeper.env
+    volumes: ["keeper-data:/app/data"]
+    command: ["run"]
+
+  keeper-monitor:
+    <<: *restart
+    profiles: ["monitor"]
+    build: ../keeper
+    env_file: keeper.env
+    volumes: ["monitor-data:/app/data"]
+    command: ["monitor"]
+
+volumes:
+  indexer-data:
+  verifier-data:
+  keeper-data:
+  monitor-data:

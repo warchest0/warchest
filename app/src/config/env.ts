@@ -27,7 +27,14 @@ export const env = {
   token: addr(process.env.NEXT_PUBLIC_TOKEN),
   distributor: addr(process.env.NEXT_PUBLIC_DISTRIBUTOR),
   /** Weight tree JSON published by the indexer, `{epoch}` is replaced by the round's snapshot epoch. */
-  treeUrlTemplate: process.env.NEXT_PUBLIC_TREE_URL_TEMPLATE || "",
+  treeUrlTemplate:
+    process.env.NEXT_PUBLIC_TREE_URL_TEMPLATE ||
+    (process.env.NEXT_PUBLIC_INDEXER_API ? `${process.env.NEXT_PUBLIC_INDEXER_API.replace(/\/+$/, "")}/trees/{epoch}` : ""),
+  /**
+   * Optional indexer HTTP API (`npm run indexer serve`). When set it serves the trees, per-account proofs and the
+   * live lot book, so the app skips client-side log scans. Everything it returns is re-verified against the chain.
+   */
+  indexerApi: (process.env.NEXT_PUBLIC_INDEXER_API || "").replace(/\/+$/, ""),
   /** Cumulative distribution tree JSON (OZ StandardMerkleTree dump) for the distributor. */
   distributionTreeUrl: process.env.NEXT_PUBLIC_DISTRIBUTION_TREE_URL || "",
   /** First block to scan for events (deployment block). */

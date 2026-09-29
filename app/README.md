@@ -34,8 +34,9 @@ with a demo wallet.
 ## Configuration
 Copy `.env.example` to `.env.local`. All variables are `NEXT_PUBLIC_*` (inlined at build time):
 `NEXT_PUBLIC_CHAIN_ID` (4663 mainnet, 46630 testnet), `NEXT_PUBLIC_GOVERNANCE`, `NEXT_PUBLIC_VAULT`,
-`NEXT_PUBLIC_TOKEN`, `NEXT_PUBLIC_DISTRIBUTOR`, `NEXT_PUBLIC_TREE_URL_TEMPLATE` (`{epoch}` is replaced by the round's
-snapshot epoch), `NEXT_PUBLIC_DISTRIBUTION_TREE_URL`, `NEXT_PUBLIC_START_BLOCK`, `NEXT_PUBLIC_LOG_CHUNK`.
+`NEXT_PUBLIC_TOKEN`, `NEXT_PUBLIC_DISTRIBUTOR`, `NEXT_PUBLIC_INDEXER_API` (optional indexer HTTP API),
+`NEXT_PUBLIC_TREE_URL_TEMPLATE` (`{epoch}` is replaced by the round's snapshot epoch; defaults to
+`$NEXT_PUBLIC_INDEXER_API/trees/{epoch}`), `NEXT_PUBLIC_DISTRIBUTION_TREE_URL`, `NEXT_PUBLIC_START_BLOCK`, `NEXT_PUBLIC_LOG_CHUNK`.
 
 ## Rebranding
 The name, ticker, tagline and colors are not final. They live in **`src/config/brand.ts` only**; colors are injected as
@@ -47,7 +48,10 @@ CSS variables and mapped to Tailwind tokens in `globals.css`. `src/app/icon.svg`
 - Voting: the app downloads the tree for the round's epoch, checks that its root equals `weightRoot(epoch).root`
   on-chain, finds the leaf `(chainid, governance, epoch, account, weight)`, verifies the proof locally, then calls
   `vote(roundId, assetIndex*2 + side, weight, proof)`.
-- Lots: rebuilt client-side from the current balance and the last 10 days of `Transfer` logs (older tokens are at the
+- With `NEXT_PUBLIC_INDEXER_API`, proofs come from `GET /proof/:epoch/:account` and lots from
+  `GET /account/:account`; the proof is still verified against the on-chain root, and the API's lots are used only
+  when its balance matches `balanceOf` on-chain.
+- Lots (without the API, or when it lags): rebuilt client-side from the current balance and the last 10 days of `Transfer` logs (older tokens are at the
   max level whatever their exact age), with the same LIFO rules as the indexer.
 - Event history (vault activity, PnL chart) is read with bounded backward `eth_getLogs` scans. A subgraph can replace
   it later behind the same provider.

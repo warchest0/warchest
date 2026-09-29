@@ -7,7 +7,7 @@ evm_version = "cancun"
 optimizer = true
 optimizer_runs = 1_000_000
 bytecode_hash = "none"
-fs_permissions = [{ access = "read", path = "./" }]
+fs_permissions = [{ access = "read", path = "./" }, { access = "read-write", path = "./deployments" }]
 # The local PoolManager (compiled only for tests, via v4-core `Deployers`) exceeds EIP-170 without via_ir.
 # Compile it with v4-core's own settings; production code (src/) keeps the default profile.
 additional_compiler_profiles = [{ name = "v4core", via_ir = true, optimizer_runs = 44_444_444 }]

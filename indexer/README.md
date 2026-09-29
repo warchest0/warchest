@@ -50,3 +50,15 @@ Benchmark: `npm run bench [holders] [buys per holder]`.
 `src/distribution.ts`:
 - `addDistribution` splits each distributor funding pro rata to the snapshot weights. Shares are rounded down to the unit, so the distributed sum never exceeds the funded amount.
 - `buildDistributionTree` produces the **cumulative** tree, with leaves identical to `WarchestDistributor.leaf`.
+
+## HTTP API (for the frontend)
+`npm run indexer serve` (env `PORT`, default 8787) keeps syncing every minute and serves read-only JSON with open CORS:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | `{ ok, epochs }` |
+| `GET /epochs` | published tree days, newest first |
+| `GET /trees/:epoch` | the published tree dump (OZ `StandardMerkleTree` format) |
+| `GET /proof/:epoch/:account` | `{ epoch, account, weight, proof }` — arguments for `WarchestGovernance.vote` |
+| `GET /leaderboard/:epoch?limit=100` | holders ranked by weight |
+| `GET /account/:account` | live lots, level of each lot, next-level time, balance and weight today |

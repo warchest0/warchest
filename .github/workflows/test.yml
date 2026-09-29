@@ -110,3 +110,16 @@ jobs:
       - run: npm test
       # static export, demo mode (no contract addresses)
       - run: npm run build
+
+  docker:
+    name: docker images build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: docker build -t warchest-indexer:ci indexer
+      - run: docker build -t warchest-keeper:ci keeper
+      - run: docker run --rm warchest-keeper:ci help

@@ -66,6 +66,17 @@ export function standardLeaf(types: readonly string[], values: readonly unknown[
   return keccak256(keccak256(encodeAbiParameters(params, values as unknown[])));
 }
 
+/** Weight leaf, identical to `WarchestGovernance.leaf(epoch, account, weight)`. */
+export function weightLeaf(
+  chainId: number | bigint,
+  governance: Address,
+  epoch: number | bigint,
+  account: Address,
+  weight: bigint,
+): Hex {
+  return standardLeaf(WEIGHT_LEAF_ENCODING, [BigInt(chainId), governance, BigInt(epoch), account, weight]);
+}
+
 /** Sorted-pair proof verification (OpenZeppelin `MerkleProof.verify`). */
 export function verifyProof(root: Hex, leaf: Hex, proof: readonly Hex[]): boolean {
   let h = leaf;

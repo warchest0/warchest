@@ -1,8 +1,8 @@
-import { createPublicClient, http, type Address, type PublicClient } from "viem";
+import { createPublicClient, http, type Address, type Hex, type PublicClient } from "viem";
 import { distributorAbi, governanceAbi, tokenAbi, vaultAbi } from "@/abi";
 import { env } from "@/config/env";
 import { assetMeta } from "@/config/assets";
-import { DAY, dayOf } from "@/lib/levels";
+import { DAY, dayOf, type Lot } from "@/lib/levels";
 import { fmtUsd } from "@/lib/format";
 import { reconstructLots, LOT_WINDOW_DAYS, type WalletTransfer } from "@/lib/lots";
 import { decodeOption, isQuorate, sideLabel, uniqueLeader, type Side } from "@/lib/options";
@@ -12,7 +12,9 @@ import {
   parseTreeDump,
   treeRoot,
   treeUrl,
+  verifyProof,
   weightEntries,
+  weightLeaf,
   type StandardTreeDump,
 } from "@/lib/tree";
 import { blockTimestamps, scanBackward, type DecodedLog } from "./logs";
@@ -159,6 +161,41 @@ function describe(l: DecodedLog): { kind: VaultEventKind; title: string; detail:
 async function withTimestamps(logs: DecodedLog[]) {
   const ts = await blockTimestamps(publicClient(), logs.map((l) => l.blockNumber));
   return logs.map((l) => ({ log: l, timestamp: ts.get(l.blockNumber) ?? 0 }));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lot book
+// ---------------------------------------------------------------------------------------------------------------
+
+async function indexerLots(account: Address): Promise<{ balance: bigint; lots: Lot[] } | undefined> {
+  if (!env.indexerApi) return undefined;
+  const res = await fetch(`${env.indexerApi}/account/${account}`);
+  if (!res.ok) return undefined;
+  const body = (await res.json()) as { balance: string; lots: { amount: string; acquiredDay: number }[] };
+  return { balance: BigInt(body.balance), lots: body.lots.map((l) => ({ amount: BigInt(l.amount), day: l.acquiredDay })) };
+}
+
+async function lotsFromLogs(account: Address, balance: bigint, windowStart: number): Promise<Lot[]> {
+  const c = publicClient();
+  const token = need(env.token, "NEXT_PUBLIC_TOKEN");
+  const since = windowStart * DAY;
+  const transfer = tokenAbi.filter((x) => x.type === "event");
+  const [inLogs, outLogs] = await Promise.all([
+    scanBackward(c, { address: token, events: transfer, args: { to: account }, fromBlock: env.startBlock, chunk: env.logChunk, sinceTimestamp: since, maxChunks: 400 }),
+    scanBackward(c, { address: token, events: transfer, args: { from: account }, fromBlock: env.startBlock, chunk: env.logChunk, sinceTimestamp: since, maxChunks: 400 }),
+  ]);
+  const all = [...inLogs, ...outLogs]
+    .filter((l) => (l.args.from as string).toLowerCase() !== (l.args.to as string).toLowerCase())
+    .sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
+  const ts = await blockTimestamps(c, all.map((l) => l.blockNumber));
+  const transfers: WalletTransfer[] = all
+    .map((l) => ({ l, t: ts.get(l.blockNumber) ?? 0 }))
+    .filter(({ t }) => t >= since)
+    .map(({ l, t }) => ({
+      day: dayOf(t),
+      delta: (l.args.to as string).toLowerCase() === account.toLowerCase() ? (l.args.value as bigint) : -(l.args.value as bigint),
+    }));
+  return reconstructLots(balance, transfers, windowStart);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -309,27 +346,13 @@ export const onchainProvider: DataProvider = {
     const token = need(env.token, "NEXT_PUBLIC_TOKEN");
     const today = dayOf(Math.floor(Date.now() / 1000));
     const windowStart = today - LOT_WINDOW_DAYS;
-    const since = windowStart * DAY;
-    const transfer = tokenAbi.filter((x) => x.type === "event");
-    const [balance, inLogs, outLogs] = await Promise.all([
-      c.readContract({ address: token, abi: tokenAbi, functionName: "balanceOf", args: [account] }),
-      scanBackward(c, { address: token, events: transfer, args: { to: account }, fromBlock: env.startBlock, chunk: env.logChunk, sinceTimestamp: since, maxChunks: 400 }),
-      scanBackward(c, { address: token, events: transfer, args: { from: account }, fromBlock: env.startBlock, chunk: env.logChunk, sinceTimestamp: since, maxChunks: 400 }),
-    ]);
-    const all = [...inLogs, ...outLogs]
-      .filter((l) => (l.args.from as string).toLowerCase() !== (l.args.to as string).toLowerCase())
-      .sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
-    const ts = await blockTimestamps(c, all.map((l) => l.blockNumber));
-    const transfers: WalletTransfer[] = all
-      .map((l) => ({ l, t: ts.get(l.blockNumber) ?? 0 }))
-      .filter(({ t }) => t >= since)
-      .map(({ l, t }) => ({
-        day: dayOf(t),
-        delta: (l.args.to as string).toLowerCase() === account.toLowerCase() ? (l.args.value as bigint) : -(l.args.value as bigint),
-      }));
-    const lots = reconstructLots(balance, transfers, windowStart);
+    const balance = await c.readContract({ address: token, abi: tokenAbi, functionName: "balanceOf", args: [account] });
+    // the indexer API knows every lot's exact day; it trails the chain head by the finalization delay, so it is only
+    // used when its balance matches the chain, otherwise the lot book is rebuilt from recent transfer logs
+    const fromApi = await indexerLots(account).catch(() => undefined);
+    const lots = fromApi && fromApi.balance === balance ? fromApi.lots : await lotsFromLogs(account, balance, windowStart);
 
-    const state: HolderState = { account, balance, lots, approximate: lots.some((l) => l.day < windowStart) };
+    const state: HolderState = { account, balance, lots, approximate: !fromApi && lots.some((l) => l.day < windowStart) };
     try {
       const epoch = Number(await c.readContract({ ...gov(), functionName: "latestEpoch" }));
       if (epoch > 0) {
@@ -370,6 +393,16 @@ export const onchainProvider: DataProvider = {
   },
 
   async getVoteProof(epoch, account) {
+    if (env.indexerApi) {
+      const [res, root] = await Promise.all([fetch(`${env.indexerApi}/proof/${epoch}/${account}`), onchainRoot(epoch)]);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`indexer proof: HTTP ${res.status}`);
+      const body = (await res.json()) as { weight: string; proof: Hex[] };
+      const weight = BigInt(body.weight);
+      const leaf = weightLeaf(env.chainId, gov().address, epoch, account, weight);
+      if (!verifyProof(root.root, leaf, body.proof)) throw new Error("The indexer's proof does not match the on-chain root");
+      return { weight, proof: body.proof };
+    }
     const [dump, root] = await Promise.all([fetchWeightTree(epoch), onchainRoot(epoch)]);
     if (treeRoot(dump).toLowerCase() !== root.root.toLowerCase()) {
       throw new Error("The published weight tree does not match the on-chain root");

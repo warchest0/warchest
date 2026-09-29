@@ -9,7 +9,9 @@ import {
   parseTreeDump,
   treeRoot,
   treeUrl,
+  verifyProof,
   weightEntries,
+  weightLeaf,
 } from "./tree";
 
 const GOV = getAddress("0x00000000000000000000000000000000000000aa");
@@ -64,6 +66,16 @@ describe("weight tree proof lookup", () => {
     target.value[4] = "999999";
     expect(() => findWeightProof(parseTreeDump(bad), accounts[0]!)).toThrow();
     expect(() => parseTreeDump({ format: "nope" })).toThrow();
+  });
+
+  it("verifies a proof served by the indexer API against the root (and rejects a wrong weight)", () => {
+    const [i, v] = [...tree.entries()][2]!;
+    const proof = tree.getProof(i) as Hex[];
+    const account = v[3] as Address;
+    const weight = BigInt(v[4] as bigint);
+    expect(verifyProof(tree.root as Hex, weightLeaf(4663, GOV, 20_000, account, weight), proof)).toBe(true);
+    expect(verifyProof(tree.root as Hex, weightLeaf(4663, GOV, 20_000, account, weight + 1n), proof)).toBe(false);
+    expect(verifyProof(tree.root as Hex, weightLeaf(46630, GOV, 20_000, account, weight), proof)).toBe(false);
   });
 
   it("expands the URL template", () => {

@@ -57,3 +57,14 @@ All the other slices were done on Opus.
 - **Bridged USDC lands on HyperEVM**, under the Hyperliquid account's single EVM key, before moving to HyperCore under the multisig (RESEARCH §2.4).
 - Governance and distributor: the guardian can **block**, but not choose. Updater rotations are delayed: ≥ 72 h for governance, ≥ 4 d for the distributor.
 - **Legal**: the scheme is very close to an investment contract (Howey) or a fund within the meaning of EU regulation (RESEARCH §6).
+
+## Added on 2026-09-29 (repository warchest0/warchest)
+| PR | What |
+|---|---|
+| #8 | Indexer HTTP API for the frontend (`/proof`, `/leaderboard`, `/account`, `/trees`, `/epochs`); fork tests made robust to live chain state; `ExtendOracleHistory` script (the WETH/USDG pool's oracle history shrank from ≈ 44 h to ≈ 11 h as activity grew; the vault needs 6 h) |
+| #9 | Frontend dapp MVP (`app/`): landing, dashboard (level rings, ×N vote weight, LIFO sell simulator, rewards), live vote, treasury transparency, leaderboard + rank card; demo mode until contracts are deployed; brand in one config file |
+| #10 | One-command testnet deployment (`DeployTestnet.s.sol`) with testnet stand-ins for WETH, USDG, the oracle pool and Across; full cycle verified on a testnet fork |
+| #11 | Docker images and compose profiles for the indexer (publisher, API, independent verifier) and the keeper (loop, independent monitor) |
+| #12 | Promotion of `staging` to `main` |
+
+Next steps that only need a funded testnet key: run `DeployTestnet`, start the indexer and keeper (dry-run) with `deploy/docker-compose.yml`, and point the frontend at `contracts/deployments/46630.json`.

@@ -87,6 +87,30 @@ jobs:
       # tests never touch the network: live endpoints are only exercised by `npm run smoke` (manual)
       - run: npm test
 
+  app:
+    name: app typecheck / lint / test / build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # static export, demo mode (no contract addresses)
+      - run: npm run build
+
   docker:
     name: docker images build
     runs-on: ubuntu-latest

@@ -13,6 +13,7 @@ A token on Robinhood Chain where every trade feeds a shared treasury, and every 
 | `contracts/` | Solidity (Foundry): `WarchestToken`, `WarchestHook`, `WarchestGovernance`, `WarchestVault`, `WarchestDistributor`, deployment scripts, tests |
 | `indexer/` | TypeScript service: indexes transfers, computes LIFO lots and levels, publishes the daily weight merkle root |
 | `keeper/` | TypeScript bot: executes governance decisions on Hyperliquid through the vault and the Across bridge |
+| `web/` | Responsive public website, animated globes, governance simulator and protocol documentation (pre-launch preview) |
 | `research/spikes/` | Throwaway gas-measurement spike |
 | `RESEARCH.md` | Verified research: Robinhood Chain, Uniswap v4, Hyperliquid, Across, gas, legal |
 | `DECISIONS.md` | Architecture decisions D1–D9 |
@@ -26,6 +27,16 @@ cd contracts && forge test           # Solidity
 cd ../indexer && npm ci && npm test  # indexer
 cd ../keeper && npm ci && npm test   # keeper
 ```
+
+## Website preview
+
+```bash
+cd web
+npm run dev  # http://localhost:4173 — no dependencies to install
+```
+
+`npm run check` validates the website code and calculator; `npm run build` produces the static site in `web/dist/`.
+The combined Vercel deployment serves the website at `/` and the demo dApp at `/dashboard/`, `/vote/`, `/treasury/`, and `/leaderboard/`. GitHub Actions validates both frontends and deploys the same tested artifact after all CI checks pass. See `deploy/FRONTEND.md` for staging/production setup.
 
 ## Workflow
 Work branches → pull request into `staging` (test environment) → `staging` is promoted to `main` (production).

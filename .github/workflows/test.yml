@@ -1,4 +1,4 @@
-name: contracts-ci
+name: warchest-ci
 
 permissions: {}
 
@@ -88,7 +88,7 @@ jobs:
       - run: npm test
 
   app:
-    name: app typecheck / lint / test / build
+    name: frontend typecheck / lint / test / build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,8 +108,20 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      # static export, demo mode (no contract addresses)
+      - run: npm --prefix web run check
+        working-directory: .
+      # Preview is explicitly demo-only until an audited on-chain deployment is configured.
       - run: npm run build
+        env:
+          NEXT_PUBLIC_DEMO: "1"
+      - run: npm --prefix web run build && node scripts/build-frontend.mjs && node scripts/check-frontend.mjs
+        working-directory: .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ github.sha }}
+          path: .vercel/output/
+          include-hidden-files: true
+          retention-days: 7
 
   docker:
     name: docker images build
@@ -123,3 +135,61 @@ jobs:
       - run: docker build -t warchest-indexer:ci indexer
       - run: docker build -t warchest-keeper:ci keeper
       - run: docker run --rm warchest-keeper:ci help
+
+  deploy:
+    name: deploy frontend to Vercel
+    needs: [contracts, indexer, keeper, app, docker]
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.repository == 'warchest0/warchest' &&
+      (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+    concurrency:
+      group: frontend-deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ github.ref_name == 'main' && vars.VERCEL_PRODUCTION_PROJECT_ID || vars.VERCEL_STAGING_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-${{ github.sha }}
+          path: .vercel/output/
+      - name: Link deployment target
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          for (const key of ['VERCEL_ORG_ID', 'VERCEL_PROJECT_ID', 'VERCEL_TOKEN']) {
+            if (!process.env[key]) throw new Error(`Missing ${key}`);
+          }
+          writeFileSync('.vercel/project.json', JSON.stringify({
+            orgId: process.env.VERCEL_ORG_ID,
+            projectId: process.env.VERCEL_PROJECT_ID
+          }));
+          JS
+      - name: Deploy tested artifact
+        id: deploy
+        run: |
+          npx --yes vercel@59.26.0 deploy --prebuilt --prod --yes --json --token "$VERCEL_TOKEN" > deployment.json
+          url=$(node -e 'const d=require("./deployment.json"); const url=d.deployment?.url ?? d.url; if (!url) throw new Error("Missing deployment URL"); console.log(url.startsWith("https://") ? url : `https://${url}`);')
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Frontend deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify public routes
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          for route in / /docs.html /dashboard/ /vote/ /treasury/ /leaderboard/; do
+            curl --fail --silent --show-error --retry 5 --retry-delay 3 "$DEPLOYMENT_URL$route" -o /dev/null
+          done

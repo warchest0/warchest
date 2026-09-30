@@ -53,7 +53,7 @@ Proposed values: 6 h, 24 h, 48 h, 10%.
   - a single active round;
   - no funds held.
 
-## Security review (Fable, 2026-09-27)
+## Security review (internal, 2026-09-27)
 Fixed findings, each covered by a regression test in `WarchestGovernanceHardening`:
 - **High**: the guardian could force a decision by choosing the timing of the pause.
 - **High**: the guardian could take the updater's place and forge the weights.

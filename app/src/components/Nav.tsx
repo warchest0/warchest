@@ -27,9 +27,10 @@ export function TopNav() {
       style={{ top: "env(safe-area-inset-top, 0px)" }}
     >
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4 sm:px-6">
-        <Link href="/" className="shrink-0 rounded-lg" aria-label="Home">
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Home is the separately built static marketing site. */}
+        <a href="/" className="shrink-0 rounded-lg" aria-label="Home">
           <Logo />
-        </Link>
+        </a>
         <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
           {NAV.map((n) => (
             <Link

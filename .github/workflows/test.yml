@@ -159,6 +159,13 @@ jobs:
       VERCEL_PROJECT_ID: ${{ github.ref_name == 'main' && vars.VERCEL_PRODUCTION_PROJECT_ID || vars.VERCEL_STAGING_PROJECT_ID }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
+      - name: Check deployment credentials
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::Missing VERCEL_TOKEN. Create a Vercel token and add it to repository Actions secrets."
+            echo "Deployment blocked: add VERCEL_TOKEN in [Actions secrets](https://github.com/warchest0/warchest/settings/secrets/actions)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -193,3 +200,9 @@ jobs:
           for route in / /docs.html /dashboard/ /vote/ /treasury/ /leaderboard/; do
             curl --fail --silent --show-error --retry 5 --retry-delay 3 "$DEPLOYMENT_URL$route" -o /dev/null
           done
+      - name: Show staging preview
+        if: always()
+        run: |
+          echo "### Staging preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Website](https://warchest-staging.vercel.app) · [Demo](https://warchest-staging.vercel.app/dashboard/?preview=1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "These stable links show the last successful deployment." >> "$GITHUB_STEP_SUMMARY"

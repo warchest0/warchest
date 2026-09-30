@@ -17,10 +17,13 @@ usage='usage: scripts/ship.sh <branch> "<commit message>" [--promote]'
 branch="${1:?$usage}"
 message="${2:?$usage}"
 promote="${3:-}"
-trailer=$'\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>'
-footer=$'\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
 
 cd "$(git rev-parse --show-toplevel)"
+
+body_file="$(mktemp)"
+trap 'rm -f "$body_file"' EXIT
+staging_links=$'Preview: https://warchest-staging.vercel.app\nDemo: https://warchest-staging.vercel.app/dashboard/?preview=1'
+
 
 # Always act as the repository owner, whatever account is currently active in `gh`
 # (several accounts may be logged in, and another tool may switch the active one).
@@ -60,11 +63,12 @@ fi
 git_as_owner fetch -q origin
 git checkout -q -b "$branch"
 git add -A
-git commit -q -m "${message}${trailer}"
+git commit -q -m "${message}"
 git_as_owner push -q -u origin "$branch"
 
+printf 'Merges `%s` into `staging`.\n\n%s\n' "$branch" "$staging_links" > "$body_file"
 url="$(gh pr create --base staging --head "$branch" --title "$message" \
-  --body "Merges \`$branch\` into \`staging\`.${footer}")"
+  --body-file "$body_file")"
 echo "→ PR into staging: $url"
 checks_ok "$url" || exit 1
 gh pr merge "$url" --merge --delete-branch
@@ -75,8 +79,9 @@ git_as_owner pull -q origin staging
 git branch -D -q "$branch" 2>/dev/null || true
 
 if [ "$promote" = "--promote" ]; then
+  printf 'Promotes `staging` to `main` (production).\n\n%s\n' "$staging_links" > "$body_file"
   url="$(gh pr create --base main --head staging --title "release: promote staging to main" \
-    --body "Promotes the current \`staging\` to \`main\` (production).${footer}")"
+    --body-file "$body_file")"
   echo "→ PR staging → main: $url"
   checks_ok "$url" || exit 1
   gh pr merge "$url" --merge # staging is never deleted

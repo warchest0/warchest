@@ -53,12 +53,12 @@ export function TreasuryView() {
         </div>
       </Card>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_1fr]">
         {d ? <PositionCard d={d} /> : <Skeleton className="h-80" />}
         <PnlCard hwm={d ? toNumber(d.highWaterMark, 6) : undefined} />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.1fr]">
         <Guarantees />
         <EventsCard />
       </div>

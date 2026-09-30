@@ -1,0 +1,12 @@
+.git
+contracts
+indexer
+keeper
+research
+app/node_modules
+app/.next
+app/out
+web/dist
+*.pdf
+.env*
+**/.env*

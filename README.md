@@ -2,6 +2,13 @@
 
 A token on Robinhood Chain where every trade feeds a shared treasury, and every holder's influence over that treasury grows the longer they hold.
 
+| | Website | Demo app |
+|---|---|---|
+| **Release** (`main`) | https://warchest-app.vercel.app | https://warchest-app.vercel.app/dashboard/?preview=1 |
+| **Staging** (`staging`) | https://warchest-staging.vercel.app | https://warchest-staging.vercel.app/dashboard/?preview=1 |
+
+The demo app runs on simulated data until the contracts are deployed.
+
 - **10% trading fee**, collected by a Uniswap v4 hook at swap time (never on plain transfers) and sent to the treasury.
 - **Holder levels 1–10**: each day held raises a lot's level; selling only resets the portion sold (LIFO).
 - **Level-weighted governance**: voting weight = Σ lot × level. Holders vote on which asset and direction the treasury trades.
@@ -13,6 +20,7 @@ A token on Robinhood Chain where every trade feeds a shared treasury, and every 
 | `contracts/` | Solidity (Foundry): `WarchestToken`, `WarchestHook`, `WarchestGovernance`, `WarchestVault`, `WarchestDistributor`, deployment scripts, tests |
 | `indexer/` | TypeScript service: indexes transfers, computes LIFO lots and levels, publishes the daily weight merkle root |
 | `keeper/` | TypeScript bot: executes governance decisions on Hyperliquid through the vault and the Across bridge |
+| `web/` | Responsive public website, animated globes, governance simulator and protocol documentation (pre-launch preview) |
 | `research/spikes/` | Throwaway gas-measurement spike |
 | `RESEARCH.md` | Verified research: Robinhood Chain, Uniswap v4, Hyperliquid, Across, gas, legal |
 | `DECISIONS.md` | Architecture decisions D1–D9 |
@@ -26,6 +34,16 @@ cd contracts && forge test           # Solidity
 cd ../indexer && npm ci && npm test  # indexer
 cd ../keeper && npm ci && npm test   # keeper
 ```
+
+## Website preview
+
+```bash
+cd web
+npm run dev  # http://localhost:4173 — no dependencies to install
+```
+
+`npm run check` validates the website code and calculator; `npm run build` produces the static site in `web/dist/`.
+The combined Vercel deployment serves the website at `/` and the demo dApp at `/dashboard/`, `/vote/`, `/treasury/`, and `/leaderboard/`. GitHub Actions validates both frontends and deploys the same tested artifact after all CI checks pass. See `deploy/FRONTEND.md` for staging/production setup.
 
 ## Workflow
 Work branches → pull request into `staging` (test environment) → `staging` is promoted to `main` (production).

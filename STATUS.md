@@ -18,13 +18,8 @@ Flow: `feat/*` → PR → `staging` → (later) `main`. Every PR was merged only
 
 **Total: 438 green tests.** They break down into 300 for the contracts (including the mainnet and testnet forks), 25 for the indexer and 113 for the keeper.
 
-## Slices done on Fable (🔁)
-- Hook: S1.2 and S1.3.
-- Vault: S3.1 to S3.3.
-- Keeper: S5.1 to S5.4.
-- Two **adversarial reviews** (governance, then vault and distributor) and the vault fixes.
-
-All the other slices were done on Opus.
+## Security reviews
+- Two **adversarial reviews** (governance, then vault and distributor); every finding fixed with a regression test.
 
 ## Verified for real
 - Gas measured on a fork of mainnet 4663: hook overhead ≈ 45k gas, i.e. ≈ $0.003 (RESEARCH §4).

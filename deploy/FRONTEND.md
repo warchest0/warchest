@@ -13,7 +13,7 @@ The dApp build explicitly sets `NEXT_PUBLIC_DEMO=1`. Its figures and actions are
 | Git branch | GitHub environment | Vercel project |
 | --- | --- | --- |
 | `staging` | `staging` | `warchest-staging` |
-| `main` | `production` | `warchest` |
+| `main` | `production` | `warchest` (stable URL: https://warchest-app.vercel.app, alias set by the deploy job) |
 
 PRs run validation without deploying. Pushes or manual workflow runs on either branch deploy only after the contracts, indexer, keeper, frontend and Docker jobs succeed. Deployment concurrency is serialized per branch. Production is updated by the existing PR promotion flow from `staging` to `main`.
 

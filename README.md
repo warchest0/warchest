@@ -2,6 +2,13 @@
 
 A token on Robinhood Chain where every trade feeds a shared treasury, and every holder's influence over that treasury grows the longer they hold.
 
+| | Website | Demo app |
+|---|---|---|
+| **Release** (`main`) | https://warchest-app.vercel.app | https://warchest-app.vercel.app/dashboard/?preview=1 |
+| **Staging** (`staging`) | https://warchest-staging.vercel.app | https://warchest-staging.vercel.app/dashboard/?preview=1 |
+
+The demo app runs on simulated data until the contracts are deployed.
+
 - **10% trading fee**, collected by a Uniswap v4 hook at swap time (never on plain transfers) and sent to the treasury.
 - **Holder levels 1–10**: each day held raises a lot's level; selling only resets the portion sold (LIFO).
 - **Level-weighted governance**: voting weight = Σ lot × level. Holders vote on which asset and direction the treasury trades.

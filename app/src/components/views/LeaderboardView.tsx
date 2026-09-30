@@ -55,7 +55,7 @@ export function LeaderboardView() {
           : entries.slice(0, 3).map((e) => <Podium key={e.account} e={e} you={e.account === mine?.account} />)}
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_420px]">
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
         <div>
           <div className="mb-3 flex items-center gap-2 rounded-xl border border-border bg-surface px-3 focus-within:border-accent">
             <IconSearch className="text-muted" />

@@ -116,7 +116,7 @@ jobs:
           NEXT_PUBLIC_DEMO: "1"
       - run: npm --prefix web run build && node scripts/build-frontend.mjs && node scripts/check-frontend.mjs
         working-directory: .
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: frontend-${{ github.sha }}
           path: .vercel/output/
@@ -169,7 +169,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: frontend-${{ github.sha }}
           path: .vercel/output/
@@ -198,7 +198,7 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: |
           for route in / /docs.html /dashboard/ /vote/ /treasury/ /leaderboard/; do
-            curl --fail --silent --show-error --retry 5 --retry-delay 3 "$DEPLOYMENT_URL$route" -o /dev/null
+            curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors "$DEPLOYMENT_URL$route" -o /dev/null
           done
       - name: Point the stable production URL at this deployment
         if: github.ref_name == 'main'
@@ -206,7 +206,7 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: |
           npx --yes vercel@59.26.0 alias set "$DEPLOYMENT_URL" warchest-app.vercel.app --token "$VERCEL_TOKEN"
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 https://warchest-app.vercel.app/ -o /dev/null
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors https://warchest-app.vercel.app/ -o /dev/null
       - name: Show stable links
         if: always()
         run: |

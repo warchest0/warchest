@@ -22,20 +22,20 @@ export const brand = {
    */
   colors: {
     /** Primary accent: CTAs, focus rings, highlights. */
-    accent: "#7cf5c6",
+    accent: "#b8d2f4",
     /** Secondary accent: level ring gradient end, charts. */
-    accent2: "#9b8cff",
+    accent2: "#668fbf",
     /** Streak / warm highlight. */
-    warm: "#ffb454",
+    warm: "#e5af66",
     long: "#34d399",
     short: "#fb7185",
     /** App background and surfaces (dark theme). */
-    bg: "#07080b",
-    surface: "#0e1015",
-    surface2: "#151821",
-    border: "#232735",
-    text: "#eef1f7",
-    muted: "#8c93a8",
+    bg: "#080c12",
+    surface: "#0d131c",
+    surface2: "#151e2b",
+    border: "#263141",
+    text: "#e8edf5",
+    muted: "#8f9daf",
   },
 } as const;
 

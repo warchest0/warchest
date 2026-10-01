@@ -11,7 +11,7 @@ export function Card({ className, children, ...p }: ComponentProps<"section">) {
   return (
     <section
       className={cx(
-        "rounded-2xl border border-border bg-surface/80 p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset] backdrop-blur-sm sm:p-6",
+        "rounded-xl border border-border/70 bg-surface p-5 sm:p-6",
         className,
       )}
       {...p}
@@ -57,12 +57,12 @@ export function Badge({ tone = "muted", children, className }: { tone?: Tone; ch
 type Variant = "primary" | "secondary" | "ghost";
 const btn: Record<Variant, string> = {
   primary:
-    "bg-accent text-bg hover:brightness-110 active:brightness-95 shadow-[0_0_0_1px_rgba(255,255,255,0.08)_inset,0_8px_24px_-8px_var(--color-accent)]",
+    "bg-accent text-bg hover:brightness-110 active:brightness-95 shadow-[0_1px_0_rgba(255,255,255,0.2)_inset]",
   secondary: "bg-surface-2 text-fg ring-1 ring-inset ring-border hover:bg-border/60",
   ghost: "text-muted hover:text-fg hover:bg-surface-2",
 };
 const btnBase =
-  "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50";
 
 export function Button({ variant = "primary", className, ...p }: ComponentProps<"button"> & { variant?: Variant }) {
   return <button type="button" className={cx(btnBase, btn[variant], className)} {...p} />;
@@ -121,7 +121,7 @@ export function DemoBadge({ className }: { className?: string }) {
         className,
       )}
     >
-      <span className="size-1.5 animate-pulse-soft rounded-full bg-warm" />
+      <span className="size-1.5 rounded-full bg-warm" />
       Demo data
     </span>
   );

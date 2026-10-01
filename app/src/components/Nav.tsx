@@ -8,7 +8,7 @@ import { Logo } from "./Logo";
 import { DemoBadge, cx } from "./ui/primitives";
 
 export const NAV = [
-  { href: "/dashboard/", label: "Dashboard", icon: IconGauge },
+  { href: "/dashboard/", label: "Overview", icon: IconGauge },
   { href: "/vote/", label: "Vote", icon: IconVote },
   { href: "/treasury/", label: "Treasury", icon: IconVault },
   { href: "/leaderboard/", label: "Leaderboard", icon: IconTrophy },
@@ -23,7 +23,7 @@ export function TopNav() {
   const active = useActive();
   return (
     <header
-      className="sticky z-40 border-b border-border/70 bg-bg/75 backdrop-blur-xl"
+      className="app-topnav sticky z-40 border-b border-border/70 bg-bg/75 backdrop-blur-xl"
       style={{ top: "env(safe-area-inset-top, 0px)" }}
     >
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4 sm:px-6">
@@ -31,15 +31,15 @@ export function TopNav() {
         <a href="/" className="shrink-0 rounded-lg" aria-label="Home">
           <Logo />
         </a>
-        <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
+        <nav aria-label="Main" className="hidden items-center gap-1 lg:flex">
           {NAV.map((n) => (
             <Link
               key={n.href}
               href={n.href}
               aria-current={active(n.href) ? "page" : undefined}
               className={cx(
-                "rounded-lg px-3 py-2 text-sm transition-colors",
-                active(n.href) ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
+                "border-b-2 px-3 py-5 text-sm transition-colors",
+                active(n.href) ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg",
               )}
             >
               {n.label}
@@ -47,7 +47,7 @@ export function TopNav() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-3">
-          <DemoBadge className="hidden sm:inline-flex" />
+          <DemoBadge className="inline-flex" />
           <ConnectButton />
         </div>
       </div>
@@ -61,7 +61,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-bg/85 backdrop-blur-xl md:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-bg/85 backdrop-blur-xl lg:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
       <div className="mx-auto grid max-w-md grid-cols-4">

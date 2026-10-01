@@ -62,7 +62,8 @@
     background: var(--color-bg);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    scroll-behavior: smooth;
+    scroll-behavior: auto;
+    scroll-padding-block: 80px;
   }
   body {
     @apply bg-bg text-fg font-sans;
@@ -284,6 +285,7 @@
     border-radius: 7px;
   }
   .lot-filters button {
+    scroll-margin-block: 90px;
     padding: 6px 10px;
     font-size: 11px;
     border-radius: 4px;

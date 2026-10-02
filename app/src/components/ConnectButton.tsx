@@ -71,7 +71,7 @@ export function ConnectButton({ className }: { className?: string }) {
   return (
     <div className={cx("flex items-center gap-2", className)}>
       {preview && (
-        <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => setPreview(false)}>
+        <Button variant="ghost" className="preview-exit hidden sm:inline-flex" onClick={() => setPreview(false)}>
           Exit preview
         </Button>
       )}

@@ -34,7 +34,9 @@ jobs:
       - run: forge build --sizes
       # Fork tests read live state from the public RPC, which rate-limits CI runners (HTTP 429).
       # Throttle requests and retry with backoff instead of failing on the first refusals.
-      - run: forge test -vvv --compute-units-per-second 120 --fork-retries 12 --fork-retry-backoff 3000
+      - run: forge test -vvv --no-match-path 'test/fork/**'
+      # The retry flags require --rpc-url; fork tests select their own forks, so the global one is harmless here.
+      - run: forge test -vvv --match-path 'test/fork/**' --rpc-url "$ROBINHOOD_RPC_URL" --compute-units-per-second 120 --fork-retries 12 --fork-retry-backoff 3000
 
   indexer:
     name: indexer typecheck / test

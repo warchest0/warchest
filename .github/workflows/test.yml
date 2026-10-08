@@ -32,7 +32,9 @@ jobs:
       - run: forge --version
       - run: forge fmt --check
       - run: forge build --sizes
-      - run: forge test -vvv
+      # Fork tests read live state from the public RPC, which rate-limits CI runners (HTTP 429).
+      # Throttle requests and retry with backoff instead of failing on the first refusals.
+      - run: forge test -vvv --compute-units-per-second 120 --fork-retries 12 --fork-retry-backoff 3000
 
   indexer:
     name: indexer typecheck / test

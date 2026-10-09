@@ -1,0 +1,6 @@
+node_modules/
+*.html
+!index.html
+# Rendered videos are large; only the terminal teasers are versioned. Render the rest from source.
+videos/out/*
+!videos/out/terminal/

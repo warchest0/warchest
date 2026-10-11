@@ -1,17 +1,17 @@
 // Fast pre-launch hype cuts: hard cuts, slammed type, printed palette (bone, ink, signal orange).
 // Every shot is a pure function of its local frame, so renders are deterministic.
 import React from "react";
-import { AbsoluteFill, random, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Img, random, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { loadFont as loadAnton } from "@remotion/google-fonts/Anton";
-import { loadFont as loadStencil } from "@remotion/google-fonts/BigShouldersStencil";
 import { loadFont as loadMono } from "@remotion/google-fonts/JetBrainsMono";
 
 const anton = loadAnton().fontFamily;
-const stencil = loadStencil("normal", { weights: ["900"] }).fontFamily;
 const mono = loadMono("normal", { weights: ["700"] }).fontFamily;
 
 export const HFPS = 30;
-const INK = "#0f0e0c", BONE = "#ece4d2", SIGNAL = "#ff4a1c", BLOOD = "#c4160c";
+// Seal palette: bone paper, ink, wax red.
+const INK = "#0f0e0c", BONE = "#ece4d2", SIGNAL = "#a3221b", BLOOD = "#5c0c07", WAX_HI = "#e0503c";
+const DARK = [INK, BLOOD, SIGNAL];
 
 type Shot = { d: number; bg?: string; render: (f: number) => React.ReactNode };
 const total = (s: Shot[]) => s.reduce((a, x) => a + x.d, 0);
@@ -68,7 +68,7 @@ function Cuts({ shots, tag }: { shots: Shot[]; tag: string }) {
   let acc = 0, i = 0;
   while (i < shots.length - 1 && frame >= acc + shots[i].d) { acc += shots[i].d; i++; }
   const s = shots[i], bg = s.bg ?? BONE;
-  const fg = bg === INK || bg === BLOOD ? BONE : INK;
+  const fg = DARK.includes(bg) ? BONE : INK;
   return <AbsoluteFill style={{ background: bg }}>
     <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>{s.render(frame - acc)}</AbsoluteFill>
     <Chrome color={fg} tag={tag} />
@@ -79,28 +79,23 @@ function Cuts({ shots, tag }: { shots: Shot[]; tag: string }) {
 // ---------- shared shots ----------
 const flash = (bg = SIGNAL): Shot => ({ d: 1, bg, render: () => null });
 const slam = (lines: string[], bg = BONE, d = 14, opts: { every?: number; color?: string; shadow?: string; k?: number; max?: number } = {}): Shot =>
-  ({ d, bg, render: (f) => <Stack f={f} lines={lines} color={opts.color ?? (bg === INK || bg === BLOOD ? BONE : INK)} {...opts} /> });
+  ({ d, bg, render: (f) => <Stack f={f} lines={lines} color={opts.color ?? (DARK.includes(bg) ? BONE : INK)} {...opts} /> });
 
-// End card: the crate-stencil lockup stamped in letter by letter.
+// End card: the wax seal is pressed onto the page, then the wordmark and tagline land.
 function EndCardShot({ f }: { f: number }) {
-  const { W } = useWH();
-  const box = W * 0.78;
-  const war = "WAR", chest = "CHEST";
-  const stamp = (i: number) => f >= 4 + i * 2;
-  const last = Math.max(0, f - 4 - Math.min(7, Math.floor((f - 4) / 2)) * 2);
-  return <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: shake(f < 20 ? last : 9, 99, 10) }}>
-    <div style={{ width: box, border: `${W * 0.012}px solid ${INK}`, padding: `${W * 0.03}px 0`, position: "relative", opacity: f >= 1 ? 1 : 0 }}>
-      <div style={{ position: "absolute", left: W * 0.03, top: W * 0.025, fontFamily: mono, fontSize: W * 0.024, color: INK }}>NO. 10</div>
-      <div style={{ position: "absolute", right: W * 0.03, top: W * 0.025, fontFamily: mono, fontSize: W * 0.024, color: INK }}>$WAR</div>
-      <div style={{ textAlign: "center", fontFamily: stencil, fontWeight: 900, fontSize: box * 0.3, lineHeight: 1, color: INK, letterSpacing: box * 0.006 }}>
-        {[...war].map((c, i) => <span key={i} style={{ opacity: stamp(i) ? 1 : 0 }}>{c}</span>)}
-      </div>
-      <div style={{ textAlign: "center", fontFamily: stencil, fontWeight: 900, fontSize: box * 0.15, lineHeight: 1.05, color: INK, letterSpacing: box * 0.055, paddingLeft: box * 0.055 }}>
-        {[...chest].map((c, i) => <span key={i} style={{ opacity: stamp(i + 3) ? 1 : 0 }}>{c}</span>)}
-      </div>
+  const { W, H } = useWH();
+  const size = Math.min(W, H) * 0.5;
+  const drop = Math.min(1, f / 6), e = 1 - Math.pow(1 - drop, 3);
+  const scale = 2.3 - 1.3 * e, rot = -16 + 10 * e;
+  const hit = f - 6; // frames since impact
+  return <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: hit >= 0 ? shake(hit, 77, 30) : undefined }}>
+    <div style={{ width: size, height: size, position: "relative" }}>
+      {hit >= 0 && <div style={{ position: "absolute", inset: "6%", borderRadius: "50%", boxShadow: `0 ${size * 0.03}px ${size * 0.06}px rgba(60,10,5,${0.35 * Math.min(1, hit / 4)})` }} />}
+      <Img src={staticFile("seal.svg")} style={{ width: "100%", height: "100%", transform: `scale(${scale}) rotate(${rot}deg)`, opacity: Math.min(1, f / 2), filter: drop < 1 ? `blur(${(1 - drop) * 6}px)` : undefined }} />
     </div>
-    <div style={{ marginTop: W * 0.05, fontFamily: anton, fontSize: W * 0.055, color: INK, opacity: f >= 22 ? 1 : 0, textTransform: "uppercase" }}>Hold longer. Rank higher.</div>
-    <div style={{ marginTop: W * 0.025, fontFamily: mono, fontSize: W * 0.03, letterSpacing: W * 0.012, color: BONE, background: SIGNAL, padding: `${W * 0.01}px ${W * 0.025}px`, opacity: f >= 30 && (f < 30 || Math.floor(f / 8) % 2 === 0 || f > 60) ? 1 : 0 }}>COMING SOON</div>
+    <Img src={staticFile("wordmark-ink.svg")} style={{ width: W * 0.62, marginTop: W * 0.05, opacity: hit >= 6 ? 1 : 0, transform: hit >= 6 ? shake(hit - 6, 78, 10) : undefined }} />
+    <div style={{ marginTop: W * 0.03, fontFamily: anton, fontSize: W * 0.05, color: INK, opacity: hit >= 14 ? 1 : 0, textTransform: "uppercase" }}>Hold longer. Rank higher.</div>
+    <div style={{ marginTop: W * 0.025, fontFamily: mono, fontSize: W * 0.03, letterSpacing: W * 0.012, color: BONE, background: SIGNAL, padding: `${W * 0.01}px ${W * 0.025}px`, opacity: hit >= 22 && (Math.floor(hit / 8) % 2 === 0 || hit > 50) ? 1 : 0 }}>$WAR · COMING SOON</div>
   </div>;
 }
 const endCard = (d = 75): Shot => ({ d, bg: BONE, render: (f) => <EndCardShot f={f} /> });
@@ -172,7 +167,7 @@ function Burn({ f }: { f: number }) {
   const p = Math.min(1, f / 30), v = Math.round(1284000 * (1 - Math.pow(1 - p, 3)));
   return <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: shake(f % 3 === 0 ? 0 : 9, f, 4) }}>
     <div style={{ fontFamily: mono, fontSize: W * 0.035, letterSpacing: W * 0.01, color: BONE }}>BURNED</div>
-    <Big text={v.toLocaleString("en-US")} w={W} color={SIGNAL} max={260} k={0.5} />
+    <Big text={v.toLocaleString("en-US")} w={W} color={WAX_HI} max={260} k={0.5} />
     <div style={{ fontFamily: mono, fontSize: W * 0.035, letterSpacing: W * 0.01, color: BONE, marginTop: W * 0.01 }}>$WAR · GONE FOREVER</div>
     <div style={{ fontFamily: mono, fontSize: W * 0.02, color: BONE, opacity: 0.5, marginTop: W * 0.04 }}>ILLUSTRATION</div>
   </div>;
@@ -239,7 +234,7 @@ function Count({ f, days }: { f: number; days: number }) {
   const lock = f - 9;
   return <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: lock >= 0 ? `${shake(lock, days, 24)} scale(${punch(lock)})` : undefined }}>
     <div style={{ fontFamily: mono, fontSize: W * 0.04, letterSpacing: W * 0.02, color: BONE }}>LAUNCH IN</div>
-    <div style={{ fontFamily: anton, fontSize: W * 0.62, lineHeight: 0.95, color: lock >= 0 ? SIGNAL : BONE }}>{n}</div>
+    <div style={{ fontFamily: anton, fontSize: W * 0.62, lineHeight: 0.95, color: lock >= 0 ? WAX_HI : BONE }}>{n}</div>
     <div style={{ fontFamily: mono, fontSize: W * 0.04, letterSpacing: W * 0.02, color: BONE }}>{days === 1 ? "DAY" : "DAYS"}</div>
   </div>;
 }

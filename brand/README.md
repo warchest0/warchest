@@ -4,7 +4,30 @@ Logo directions and teaser videos for the pre-launch campaign on X. Open `index.
 
 Everything is drawn in code (SVG, HTML and [Remotion](https://www.remotion.dev)), so every asset can be regenerated and edited.
 
-## Logos
+## Chosen mark: the seal
+
+The wax seal is the Warchest mark. Everything lives in `logos/seal/`:
+
+| File | Use |
+|---|---|
+| `png/avatar-1024.png`, `png/avatar-400.png` | X profile picture (dark variant: `avatar-1024-dark.png`) |
+| `png/x-banner-1500x500.png` | X header (dark variant: `x-banner-1500x500-dark.png`) |
+| `png/og-1200x630.png` | Link preview for the site |
+| `png/favicon-16.png`, `png/favicon-32.png`, `png/apple-touch-icon-180.png` | Site icons |
+| `png/seal-2048.png`, `png/seal-flat-1024.png`, `png/lockup-ink-2400.png` | Transparent masters |
+| `svg/seal.svg` | Full colour mark |
+| `svg/seal-flat.svg` | Two colours, no relief (small sizes, print) |
+| `svg/seal-mono-ink.svg`, `svg/seal-mono-bone.svg` | One colour, lettering knocked out (stamps, embossing) |
+| `svg/seal-icon.svg` | Simplified mark for 16–32 px |
+| `svg/wordmark-*.svg`, `svg/lockup-*.svg` | "Warchest" wordmark, alone and next to the seal |
+
+All SVG lettering is outlined, so the files render the same everywhere without fonts. Colours: wax `#a3221b`, bone `#ece4d2`, ink `#0f0e0c`. Type: UnifrakturCook (wordmark), JetBrains Mono (ring and taglines), Anton (video headlines), all under the SIL Open Font License and bundled in `logos/seal/fonts/`.
+
+Regenerate: `cd brand/logos && npm ci && node seal/build.mjs` (preview: `logos/seal/sheet.png`).
+
+The kinetic videos (`05`–`08`, `t-7`…`t-1`) use the seal palette and end on the seal being pressed onto the page.
+
+## Other directions explored
 
 | Folder | Direction |
 |---|---|

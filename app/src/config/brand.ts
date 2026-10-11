@@ -7,14 +7,14 @@ export const brand = {
   name: "Warchest",
   /** Token ticker, without the `$`. */
   ticker: "WAR",
-  tagline: "Hold longer. Vote heavier. Trade together.",
+  tagline: "Hold longer. Rank higher.",
   description:
-    "Every trade funds a shared treasury. Every day you hold makes your vote count more. Holders decide what the treasury trades on Hyperliquid.",
+    "Every trade fills a shared chest. Every day you hold, you rank up. The higher your rank, the bigger your share of what the chest earns.",
   /** Public links; leave empty to hide. */
   links: {
     github: "https://github.com/warchest0/warchest",
     x: "",
-    docs: "https://github.com/warchest0/warchest#readme",
+    docs: "/docs.html",
   },
   /**
    * Colors are injected as CSS variables on <html> (see `brandCssVars`) and mapped to Tailwind tokens in
@@ -22,20 +22,20 @@ export const brand = {
    */
   colors: {
     /** Primary accent: CTAs, focus rings, highlights. */
-    accent: "#b8d2f4",
+    accent: "#e0503c",
     /** Secondary accent: level ring gradient end, charts. */
-    accent2: "#668fbf",
+    accent2: "#a3221b",
     /** Streak / warm highlight. */
-    warm: "#e5af66",
-    long: "#34d399",
-    short: "#fb7185",
-    /** App background and surfaces (dark theme). */
-    bg: "#080c12",
-    surface: "#0d131c",
-    surface2: "#151e2b",
-    border: "#263141",
-    text: "#e8edf5",
-    muted: "#8f9daf",
+    warm: "#d9a441",
+    long: "#7fb069",
+    short: "#e0503c",
+    /** App background and surfaces (dark theme): ink, with bone text. */
+    bg: "#0f0e0c",
+    surface: "#181613",
+    surface2: "#221f1b",
+    border: "#36312a",
+    text: "#ece4d2",
+    muted: "#a59c8b",
   },
 } as const;
 

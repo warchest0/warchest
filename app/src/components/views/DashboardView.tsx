@@ -7,7 +7,7 @@ import { tickerLabel } from "@/config/brand";
 import { isDemo } from "@/config/env";
 import type { HolderState } from "@/data/types";
 import { explainError, useClaimRewards } from "@/hooks/actions";
-import { useActiveRounds, useClaim, useHolder } from "@/hooks/queries";
+import { useClaim, useHolder } from "@/hooks/queries";
 import { useNow } from "@/hooks/useNow";
 import { useViewer } from "@/hooks/useViewer";
 import {
@@ -34,7 +34,6 @@ import { IconArrowRight, IconClock, IconCoins, IconTrophy } from "../icons";
 import { LevelRing } from "../ui/LevelRing";
 import {
   Button,
-  ButtonLink,
   Card,
   CardHeader,
   DemoBadge,
@@ -67,7 +66,7 @@ function ConnectGate() {
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-muted">
           Connect the wallet that holds {tickerLabel} to see each lot&apos;s
-          level, your voting multiplier, the next level countdown and your
+          rank, your share weight, the next rank countdown and your
           rewards.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -189,7 +188,7 @@ function HolderBody({ h }: { h: HolderState }) {
           }
         />
         <Stat
-          label="Current voting weight"
+          label="Current share weight"
           value={fmtWeight(weight)}
           sub="Based on your lots’ current levels"
         />
@@ -215,10 +214,10 @@ function HolderBody({ h }: { h: HolderState }) {
             </div>
             <div className="min-w-0">
               <h2 className="text-2xl font-medium tracking-tight">
-                Time gives you a voice.
+                Time is the only way up.
               </h2>
               <p className="mt-3 max-w-xs text-sm leading-relaxed text-muted">
-                Your holdings gain voting power every day. Each lot reaches its
+                Your tokens climb one rank every day. Each lot reaches its
                 maximum after 10 UTC days.
               </p>
               <div className="mt-6 flex items-center gap-2 text-xs text-accent">
@@ -249,7 +248,7 @@ function HolderBody({ h }: { h: HolderState }) {
             </span>
           </div>
         </section>
-        <GovernancePreview account={h.account} now={now} />
+        <ChestPreview />
       </div>
       <section className="lots-panel" aria-labelledby="lots-heading">
         <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-6">
@@ -261,7 +260,7 @@ function HolderBody({ h }: { h: HolderState }) {
               </span>
             </h2>
             <p className="mt-1 text-xs text-muted">
-              One purchase. One timeline. Increasing voting power.
+              One purchase. One timeline. One rank per day.
             </p>
           </div>
           <div className="lot-filters" role="group" aria-label="Filter lots">
@@ -289,7 +288,7 @@ function HolderBody({ h }: { h: HolderState }) {
                 <th scope="col">Acquired</th>
                 <th scope="col">Amount</th>
                 <th scope="col">Level progression</th>
-                <th scope="col">Voting weight</th>
+                <th scope="col">Share weight</th>
                 <th scope="col">Maturity</th>
               </tr>
             </thead>
@@ -367,76 +366,25 @@ function HolderBody({ h }: { h: HolderState }) {
   );
 }
 
-function GovernancePreview({
-  account,
-  now,
-}: {
-  account: Address;
-  now: number;
-}) {
-  const rounds = useActiveRounds(account);
-  const round = rounds.data?.direction ?? rounds.data?.close;
-  const open =
-    !!round &&
-    !round.finalized &&
-    !round.voided &&
-    now >= round.startsAt &&
-    now < round.endsAt &&
-    !rounds.data?.paused;
-  const participation =
-    round && round.totalWeight > 0n
-      ? Number((round.totalVoted * 10000n) / round.totalWeight) / 100
-      : 0;
+/** What the chest is building next. Static until the rewards and Siege contracts ship. */
+function ChestPreview() {
   return (
     <section className="governance-panel">
-      <div className="flex items-center justify-between gap-2">
-        <span className="section-label">02 / Governance</span>
-        {open && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] text-long">
-            <span className="size-1 rounded-full bg-long" />
-            Voting open
-          </span>
-        )}
+      <span className="section-label">02 / The chest</span>
+      <div className="my-6">
+        <h2 className="text-2xl font-medium tracking-tight">Higher rank, bigger share.</h2>
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          What the chest earns is shared by tokens × rank. When the price falls more than 30% under its high, Siege
+          mode buys back half of every sell and burns it.
+        </p>
+        <ul className="mt-5 space-y-2 text-xs text-muted">
+          <li className="flex justify-between"><span>Rewards by tokens × rank</span><span className="text-accent">In progress</span></li>
+          <li className="flex justify-between"><span>Siege mode: buyback and burn</span><span className="text-accent">In progress</span></li>
+        </ul>
       </div>
-      {rounds.isLoading ? (
-        <Skeleton className="my-6 h-32" />
-      ) : rounds.error ? (
-        <div className="my-5">
-          <ErrorNote error={rounds.error} />
-        </div>
-      ) : (
-        <div className="my-6">
-          <h2 className="text-2xl font-medium tracking-tight">
-            {open ? "The next move is yours." : "Decisions, made together."}
-          </h2>
-          <p className="mt-3 text-sm leading-relaxed text-muted">
-            {open
-              ? round.hasVoted
-                ? "Your vote is recorded. Follow the round as the community decides."
-                : round.kind === "close"
-                  ? "Decide whether to close the treasury’s position. Your snapshot determines your voting power."
-                  : "Choose the treasury’s next direction. Your snapshot determines your voting power."
-              : "Explore community decisions and the status of the next voting round."}
-          </p>
-          {open && (
-            <div className="mt-5">
-              <div className="mb-2 flex justify-between text-xs">
-                <span className="text-muted">Participation</span>
-                <span className="num">{participation.toFixed(1)}%</span>
-              </div>
-              <Meter value={participation / 100} />
-              <p className="mt-2 text-[11px] text-muted">
-                Quorum {round.quorumBps / 100}% · Ends in{" "}
-                {fmtClock(round.endsAt - now)}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-      <ButtonLink href="/vote/" className="mt-auto w-full">
-        {open && !round.hasVoted ? "Explore the vote" : "View governance"}
-        <IconArrowRight />
-      </ButtonLink>
+      <a href="/docs.html" className="mt-auto inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm text-fg transition-colors hover:border-accent">
+        Read how it works <IconArrowRight />
+      </a>
     </section>
   );
 }
@@ -451,7 +399,7 @@ function Rewards({ account }: { account: Address }) {
       <CardHeader
         icon={<IconCoins />}
         title="Rewards"
-        hint="Realized trading profit above the high-water mark, if distribution is enabled."
+        hint="Your share of what the chest distributes, weighted by tokens × rank."
       />
       {claim.isLoading ? (
         <Skeleton className="h-24" />
@@ -459,9 +407,8 @@ function Rewards({ account }: { account: Address }) {
         <ErrorNote error={claim.error} />
       ) : !c ? (
         <p className="text-sm leading-relaxed text-muted">
-          Distribution is not enabled on this deployment. Whether profits are
-          distributed or used for buyback is still an open decision (pending
-          legal advice).
+          Rewards are not live yet. Once they are, holders share what the chest
+          earns by tokens × rank.
         </p>
       ) : (
         <div>
@@ -509,12 +456,12 @@ function Rewards({ account }: { account: Address }) {
           )}
         </div>
       )}
-      <Link
-        href="/treasury/"
+      <a
+        href="/docs.html#rewards"
         className="mt-5 inline-flex items-center gap-1 text-xs text-muted hover:text-fg"
       >
-        How profit is measured <IconArrowRight />
-      </Link>
+        How rewards work <IconArrowRight />
+      </a>
     </Card>
   );
 }

@@ -1,6 +1,6 @@
 # Warchest website
 
-Original responsive marketing site and protocol preview. Native HTML/CSS/ES modules, local WebGL scenes, no runtime dependencies or external requests. The design study is in `DESIGN.md`.
+Responsive marketing site and protocol notes. Native HTML/CSS/ES modules, no runtime dependencies or external requests. The design study is in `DESIGN.md`.
 
 ## Run
 
@@ -24,11 +24,8 @@ Deploy the resulting `web/dist/` directory to any static host. Both `index.html`
 
 ## Functional scope
 
-- Photographic WebGL Earth horizon and blue point-map globe with moving routes, visibility-aware rendering, eased zoom/rotation, pause controls and reduced-motion support. A Canvas renderer remains available when WebGL is unavailable.
-- Direct entry into the Next.js demo dashboard, mobile navigation, in-page links, treasury stage selector.
-- Holding-days calculator follows `indexer/src/lots.ts`: level 0 on the acquisition day, whole UTC days, maximum 10; integer voting weights.
-- Documentation tracks the repository's implemented architecture and pending deployment/audit work.
-
-The Vercel pipeline combines this website with the demo dApp in `app/` (see `deploy/FRONTEND.md`). This is a pre-launch frontend: no invented on-chain data, wallet transactions, token address or enabled profit distribution. A real application will need deployed contract addresses, RPC configuration, the indexer API and wallet integration. Geographical arcs are conceptual and explicitly labelled.
-
-Assets and provenance: `assets/README.md`. Inter is self-hosted with system font fallbacks. All motion can be turned off in the footer; the OS reduced-motion preference is honored.
+- Seal edition: bone paper, ink and wax red, self-hosted Anton, JetBrains Mono and UnifrakturCook. Design notes in `DESIGN.md`.
+- Sections: the chest (10% fee), ranks (interactive calculator), Siege mode, treasury and reserve, build status. Direct entry into the Next.js demo dashboard.
+- The rank calculator follows `indexer/src/lots.ts`: rank 0 on the acquisition day, whole UTC days, maximum 10; share weight = tokens × rank.
+- Notes (`docs.html`) separate what is built in the repository from what is still in progress.
+- Scroll reveals, a seal "press" on load and a moving ribbon, all disabled by reduced-motion settings or the footer motion switch.

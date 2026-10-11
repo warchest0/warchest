@@ -74,7 +74,7 @@ export const RankCardSvg = forwardRef<SVGSVGElement, { d: RankCardData }>(functi
       </text>
 
       <g fontFamily={FONT}>
-        <text x="72" y="515" fill={c.muted} fontSize="22">Voting weight</text>
+        <text x="72" y="515" fill={c.muted} fontSize="22">Share weight</text>
         <text x="72" y="556" fill={c.text} fontFamily={MONO} fontSize="36" fontWeight="600">{d.weight}</text>
         <text x="352" y="515" fill={c.muted} fontSize="22">Share</text>
         <text x="352" y="556" fill={c.text} fontFamily={MONO} fontSize="36" fontWeight="600">{(d.share * 100).toFixed(2)}%</text>
@@ -143,7 +143,7 @@ async function svgToPng(svg: SVGSVGElement): Promise<Blob> {
 export function RankCard({ d }: { d: RankCardData }) {
   const ref = useRef<SVGSVGElement>(null);
   const [status, setStatus] = useState<string>();
-  const text = `I'm #${d.rank} of ${d.holders} ${tickerLabel} holders${d.level !== undefined ? `, avg level ${d.level.toFixed(1)}/${MAX_LEVEL}` : ""}. Hold longer, vote heavier.`;
+  const text = `I'm #${d.rank} of ${d.holders} ${tickerLabel} holders${d.level !== undefined ? `, avg level ${d.level.toFixed(1)}/${MAX_LEVEL}` : ""}. Hold longer, rank higher.`;
 
   async function download() {
     if (!ref.current) return;

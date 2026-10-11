@@ -11,16 +11,14 @@ export function Footer() {
           <Logo />
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted">{brand.description}</p>
           <p className="mt-4 max-w-md text-xs leading-relaxed text-muted/80">
-            Not financial advice. The treasury trades leveraged perpetual futures: it can lose money, including all of
-            the capital committed to a position. Smart contracts are not yet audited.
+            Pre-launch software. Smart contracts are not deployed and not yet audited. Nothing here is an offer,
+            investment advice or a promise of returns.
           </p>
         </div>
         <div>
           <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-muted">App</h3>
           <ul className="mt-4 space-y-2 text-sm">
             <li><Link className="text-fg/80 hover:text-fg" href="/dashboard/">Dashboard</Link></li>
-            <li><Link className="text-fg/80 hover:text-fg" href="/vote/">Vote</Link></li>
-            <li><Link className="text-fg/80 hover:text-fg" href="/treasury/">Treasury</Link></li>
             <li><Link className="text-fg/80 hover:text-fg" href="/leaderboard/">Leaderboard</Link></li>
           </ul>
         </div>

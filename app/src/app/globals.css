@@ -19,7 +19,8 @@
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono:
-    var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    var(--font-brand-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-brand-display), "Impact", "Arial Narrow", sans-serif;
 }
 
 @theme {
@@ -225,8 +226,8 @@
   }
   .conviction-panel {
     background:
-      radial-gradient(ellipse at 15% 65%, #21344e66, transparent 65%),
-      linear-gradient(135deg, #121c29, var(--color-surface));
+      radial-gradient(ellipse at 15% 65%, #a3221b2e, transparent 65%),
+      linear-gradient(135deg, #1d1915, var(--color-surface));
   }
   .governance-panel {
     display: flex;

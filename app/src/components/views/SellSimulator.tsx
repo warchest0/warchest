@@ -112,7 +112,7 @@ export function SellSimulator({ lots, day }: { lots: Lot[]; day: number }) {
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted">Voting weight kept</dt>
+          <dt className="text-xs text-muted">Share weight kept</dt>
           <dd className="num mt-1 text-lg font-semibold text-accent">{(sim.weightKeptBps / 100).toFixed(1)}%</dd>
         </div>
         <div>

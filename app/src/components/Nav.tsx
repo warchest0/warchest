@@ -3,14 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ConnectButton } from "./ConnectButton";
-import { IconGauge, IconTrophy, IconVault, IconVote } from "./icons";
+import { IconGauge, IconTrophy } from "./icons";
 import { Logo } from "./Logo";
 import { DemoBadge, cx } from "./ui/primitives";
 
 export const NAV = [
   { href: "/dashboard/", label: "Overview", icon: IconGauge },
-  { href: "/vote/", label: "Vote", icon: IconVote },
-  { href: "/treasury/", label: "Treasury", icon: IconVault },
   { href: "/leaderboard/", label: "Leaderboard", icon: IconTrophy },
 ] as const;
 
@@ -64,7 +62,7 @@ export function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-bg/85 backdrop-blur-xl lg:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="mx-auto grid max-w-md grid-cols-4">
+      <div className="mx-auto grid max-w-md grid-cols-2">
         {NAV.map((n) => {
           const on = active(n.href);
           const Icon = n.icon;

@@ -51,11 +51,14 @@ contract WarchestVaultOracleForkTest is WarchestVaultForkFixture {
         assertGt(longHeld, twapHeld + maxDev, "the 6 h TWAP did not follow");
         // The 6 h TWAP is an arithmetic mean: holding the dump for `held` seconds moves it by at most
         // (dump depth) * held / 6 h. The depth depends on live pool liquidity, so bound the move by that, not by a constant.
+        // The seconds leaving the window are live market history, not exactly the 6 h mean: allow 10% for that drift.
         uint256 held = TWAP_WINDOW + 1 minutes;
         int256 expectedMove =
             (int256(longBefore) - int256(spot)) * int256(held) / int256(uint256(vault.LONG_TWAP_WINDOW()));
         assertLe(
-            int256(longBefore) - int256(longHeld), expectedMove + 2, "6 h TWAP moved at most by the time-weighted dump"
+            int256(longBefore) - int256(longHeld),
+            expectedMove * 11 / 10 + 2,
+            "6 h TWAP moved at most by the time-weighted dump"
         );
 
         assertFalse(vault.oracleStable());

@@ -3,60 +3,62 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#ece4d2">
+<meta name="theme-color" content="#0b0a09">
 <title>Notes — Warchest</title>
 <meta name="description" content="How Warchest works: the 10% fee, ranks per lot, rewards by tokens × rank, Siege mode, the treasury, and what is built today.">
 <meta property="og:image" content="/assets/og.png">
 <link rel="icon" href="assets/seal-icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 <style>
-  .docs { width: min(860px, 100% - 64px); margin: 0 auto; padding: 90px 0 120px; }
-  .docs h1 { font-family: var(--display); font-size: clamp(56px, 8vw, 104px); line-height: 0.9; text-transform: uppercase; margin: 18px 0 24px; }
+  .docs-header { position: static; margin-top: 27px; }
+  .docs { width: min(860px, 100% - 48px); margin: 0 auto; padding: 90px 0 120px; }
+  .docs h1 { font-size: clamp(52px, 7vw, 92px); line-height: 1.02; margin: 22px 0 26px; }
+  .docs h1 span { color: var(--dim); }
   .docs > p { max-width: 620px; }
-  .notice { border: 2px solid var(--wax); padding: 18px 20px; margin: 34px 0 10px; font-size: 14px; }
-  .notice b { color: var(--wax); }
-  .docs-nav { display: flex; flex-wrap: wrap; gap: 22px; margin: 34px 0 30px; font-size: 13px; }
-  .docs-nav a { color: var(--wax); text-decoration: underline; text-underline-offset: 4px; }
-  .docs section { padding: 46px 0 10px; border-top: 2px solid var(--ink); margin-top: 40px; }
-  .docs h2 { font-family: var(--display); font-size: 44px; line-height: 1; text-transform: uppercase; margin-bottom: 22px; }
-  .docs h3 { font-family: var(--display); font-size: 24px; text-transform: uppercase; margin: 30px 0 10px; }
-  .docs p, .docs li { font-size: 15px; line-height: 1.85; color: var(--ink-2); }
+  .notice { border: 1px solid rgba(224, 80, 60, 0.5); border-radius: 10px; background: rgba(163, 34, 27, 0.1); padding: 18px 20px; margin: 34px 0 10px; font-size: 13px; line-height: 1.7; color: #d4cab7; }
+  .notice b { color: var(--wax-hi); }
+  .docs-nav { display: flex; flex-wrap: wrap; gap: 10px; margin: 30px 0; font-family: var(--mono); font-size: 11px; }
+  .docs-nav a { padding: 7px 12px; border: 1px solid var(--line); border-radius: 20px; color: #c3b9a6; }
+  .docs-nav a:hover { border-color: var(--wax-hi); color: var(--text); }
+  .docs section { padding: 46px 0 10px; border-top: 1px solid var(--line); margin-top: 40px; }
+  .docs h2 { font-size: 40px; line-height: 1.05; margin-bottom: 22px; }
+  .docs h2 small { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--wax-hi); margin-bottom: 14px; }
+  .docs h3 { font-size: 18px; font-weight: 500; letter-spacing: -0.4px; margin: 30px 0 10px; }
+  .docs p, .docs li { font-size: 14px; line-height: 1.85; }
   .docs p + p { margin-top: 14px; }
-  .docs code { background: rgba(15, 14, 12, 0.07); padding: 2px 6px; font-size: 13px; }
-  .docs a { color: var(--wax); }
-  .formula { font-family: var(--display); font-size: 30px; margin: 18px 0; color: var(--ink); }
-  .docs table { width: 100%; border-collapse: collapse; margin: 22px 0; font-size: 14px; }
-  .docs th, .docs td { text-align: left; padding: 13px 8px; border-bottom: 1px solid var(--line); }
-  .docs th { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
-  .docs td:last-child { white-space: nowrap; font-weight: 700; }
-  .docs td.done { color: var(--ink); }
-  .docs td.next { color: var(--wax); }
-  .docs td.later { color: var(--muted); }
+  .docs a:not(.button) { color: var(--wax-hi); }
+  .formula { font-family: var(--mono); font-size: 18px; margin: 18px 0; padding: 16px 18px; border-left: 2px solid var(--wax-hi); background: #100e0c; color: var(--text) !important; }
+  .docs table { width: 100%; border-collapse: collapse; margin: 22px 0; font-size: 13px; }
+  .docs th, .docs td { text-align: left; padding: 13px 8px; border-bottom: 1px solid var(--line); color: #d4cab7; }
+  .docs th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+  .docs td:last-child { white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+  .docs td.done { color: var(--ok); }
+  .docs td.next { color: var(--wax-hi); }
+  .docs td.later { color: var(--dim); }
+  @media (max-width: 800px) { .docs-header { margin: 18px 4% 0; } .docs td:last-child { white-space: normal; } }
 </style>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="header">
-  <div class="wrap">
-    <a class="brand" href="index.html" aria-label="Warchest home"><img src="assets/seal.svg" alt="" width="38" height="38"><img src="assets/wordmark-ink.svg" alt="Warchest" width="122" height="26"></a>
-    <div class="nav-actions"><a class="button button-small button-ghost" href="index.html">← Back</a></div>
-  </div>
+<header class="header docs-header">
+  <a class="brand" href="index.html" aria-label="Warchest home"><img src="assets/seal.svg" alt="" width="34" height="34"><img class="wordmark" src="assets/wordmark-bone.svg" alt="Warchest" width="108" height="23"></a>
+  <div class="nav-actions" style="margin-left:auto"><a class="button button-small" href="index.html"><span>←</span> Back</a></div>
 </header>
 
 <main id="main" class="docs">
-  <p class="label wax-text">Warchest / Notes</p>
-  <h1>Know what<br>you're holding.</h1>
+  <p class="label">// Warchest / Notes</p>
+  <h1>Know what<br><span>you're holding.</span></h1>
   <p>How the chest fills, how ranks work, what holders share and when the chest fights back. These notes separate what is built in the repository from what is still being built.</p>
   <div class="notice"><b>Pre-launch.</b> Contracts are not deployed and an independent external audit is pending. Mechanics can change before launch. Nothing here is an offer, investment advice or a promise of returns.</div>
   <nav class="docs-nav" aria-label="Sections"><a href="#fee">The fee</a><a href="#ranks">Ranks</a><a href="#rewards">Rewards</a><a href="#siege">Siege</a><a href="#treasury">Treasury</a><a href="#status">Status</a></nav>
 
   <section id="fee">
-    <h2>01 / The fee</h2>
+    <h2><small>// 01</small>The fee</h2>
     <p>$WAR is a fixed-supply ERC-20 with no transfer tax in the token itself. A Uniswap v4 hook takes 10% of every buy and every sell through the official pool and sends it to the chest, always in ETH. Ordinary wallet transfers and liquidity operations pay nothing.</p>
   </section>
 
   <section id="ranks">
-    <h2>02 / Ranks</h2>
+    <h2><small>// 02</small>Ranks</h2>
     <p>Every batch of tokens you receive is a lot. A lot starts at rank 0 on the day it arrives and climbs one rank per full UTC day, up to rank 10. The indexer computes this from the token's transfer history.</p>
     <p>Ranks, from 0 to 10: Recruit, Soldier, Corporal, Sergeant, Lieutenant, Captain, Commander, Colonel, General, Marshal, Warlord.</p>
     <h3>Selling part of a bag</h3>
@@ -64,26 +66,26 @@
   </section>
 
   <section id="rewards">
-    <h2>03 / Rewards</h2>
+    <h2><small>// 03</small>Rewards</h2>
     <p>What the chest distributes is split between holders by weight:</p>
     <p class="formula">weight = Σ (lot amount × rank)</p>
     <p>The same bag at rank 10 weighs five times the same bag at rank 2. A lot on its first day has no weight yet. The weight decides a share of what is distributed; it is not a promised return.</p>
   </section>
 
   <section id="siege">
-    <h2>04 / Siege mode</h2>
+    <h2><small>// 04</small>Siege mode</h2>
     <p>When the price is more than 30% under its all-time high, Siege arms. While it lasts, the chest buys back half of every sell, with no daily cap, and every token it buys back is burned.</p>
     <p>Siege uses the chest's liquid reserve; it is a defence of the price floor, not a guarantee against losses.</p>
   </section>
 
   <section id="treasury">
-    <h2>05 / The treasury</h2>
+    <h2><small>// 05</small>The treasury</h2>
     <p>The chest keeps 20% liquid for buybacks. When that reserve falls to 5%, it refills from the rest of the treasury. The remaining funds go to audited on-chain yield vaults; the provider is still being chosen. That yield is what holders share by rank.</p>
     <p>Conversions from ETH use on-chain time-weighted prices with slippage bounds and a circuit breaker that refuses to convert while the short-term price strays too far from its 6-hour average.</p>
   </section>
 
   <section id="status">
-    <h2>06 / Status</h2>
+    <h2><small>// 06</small>Status</h2>
     <p>The repository started from an earlier design in which holders voted on trades executed off-chain. That design is being retired: the voting and off-chain trading modules will not ship. What carries over, and what is being built:</p>
     <table>
       <thead><tr><th>Component</th><th>Status</th></tr></thead>
@@ -102,13 +104,14 @@
   </section>
 </main>
 
-<footer class="footer">
-  <div class="wrap">
-    <div class="footer-brand"><img src="assets/seal-mono-bone.svg" alt="" width="86" height="86"><img src="assets/wordmark-bone.svg" alt="Warchest" width="206" height="44"></div>
-    <span></span>
-    <nav aria-label="Footer"><a href="index.html">Home</a><a href="/dashboard/?preview=1">App preview</a><a href="https://github.com/warchest0/warchest">GitHub ↗</a></nav>
-    <small>Hold longer. Rank higher. Pre-launch software, not audited.</small>
+<footer>
+  <div class="footer-top">
+    <a class="brand" href="index.html"><img src="assets/seal.svg" alt="" width="34" height="34"><img class="wordmark" src="assets/wordmark-bone.svg" alt="Warchest" width="108" height="23"></a>
+    <span>Hold longer. Rank higher.</span>
+    <a href="/dashboard/?preview=1">App preview ↗</a>
+    <a href="https://github.com/warchest0/warchest">GitHub ↗</a>
   </div>
+  <div class="footer-bottom"><span>Pre-launch software, not audited.</span><span>Not an offer or investment advice</span></div>
 </footer>
 </body>
 </html>

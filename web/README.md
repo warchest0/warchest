@@ -24,8 +24,8 @@ Deploy the resulting `web/dist/` directory to any static host. Both `index.html`
 
 ## Functional scope
 
-- Seal edition: bone paper, ink and wax red, self-hosted Anton, JetBrains Mono and UnifrakturCook. Design notes in `DESIGN.md`.
+- Night edition with the seal: dark ground and WebGL globe, wax red and bone, terminal details; self-hosted Inter and JetBrains Mono. Design notes in `DESIGN.md`.
 - Sections: the chest (10% fee), ranks (interactive calculator), Siege mode, treasury and reserve, build status. Direct entry into the Next.js demo dashboard.
 - The rank calculator follows `indexer/src/lots.ts`: rank 0 on the acquisition day, whole UTC days, maximum 10; share weight = tokens × rank.
 - Notes (`docs.html`) separate what is built in the repository from what is still in progress.
-- Scroll reveals, a seal "press" on load and a moving ribbon, all disabled by reduced-motion settings or the footer motion switch.
+- Globe rotation, scroll reveals and a blinking cursor, all disabled by reduced-motion settings or the footer motion switch.

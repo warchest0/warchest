@@ -33,7 +33,7 @@ export function LeaderboardView() {
             <span>Leaderboard</span>
           </>
         }
-        title="Holders by voting weight"
+        title="Holders by share weight"
         right={
           lb.data && lb.data.epoch > 0 ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">

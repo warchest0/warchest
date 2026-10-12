@@ -36,7 +36,7 @@ jobs:
       # Throttle requests and retry with backoff instead of failing on the first refusals.
       - run: forge test -vvv --no-match-path 'test/fork/**'
       # The retry flags require --rpc-url; fork tests select their own forks, so the global one is harmless here.
-      - run: forge test -vvv --match-path 'test/fork/**' --rpc-url "$ROBINHOOD_RPC_URL" --compute-units-per-second 120 --fork-retries 12 --fork-retry-backoff 3000
+      - run: forge test -vvv --match-path 'test/fork/**' --rpc-url "$ROBINHOOD_RPC_URL" --threads 2 --compute-units-per-second 40 --fork-retries 20 --fork-retry-backoff 5000
 
   indexer:
     name: indexer typecheck / test

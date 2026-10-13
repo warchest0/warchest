@@ -4,6 +4,8 @@ Logo directions and teaser videos for the pre-launch campaign on X. Open `index.
 
 Everything is drawn in code (SVG, HTML and [Remotion](https://www.remotion.dev)), so every asset can be regenerated and edited.
 
+**Ready-to-use files are in [`kit/`](kit/README.md):** logo, social images, colours, fonts, every launch video and website screenshots.
+
 ## Chosen mark: the seal
 
 The wax seal is the Warchest mark. Everything lives in `logos/seal/`:
